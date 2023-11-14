@@ -18,12 +18,12 @@ from medAI.datasets import (
             AlignedFilesDataset,
         )
 import matplotlib.pyplot as plt
-from medAI.utils.setup import basic_experiment_setup
+from medAI.utils import BasicExperiment, BasicExperimentConfig
 from medAI.utils import show_points
 
 
 @dataclass
-class Config:
+class Config(BasicExperimentConfig):
     """Training configuration"""
 
     epochs: int = 5
@@ -49,13 +49,7 @@ def dice_score(mask_probs, target_mask):
     return 2 * intersection / union
 
 
-class Experiment:
-    def __init__(self, config: Config):
-        self.config = config
-        self._config_dict = asdict(config)
-        self.model = None
-        self.train_loader = None
-        self.optimizer = None
+class Experiment(BasicExperiment):
 
     def __call__(self):
         self.setup()
@@ -70,12 +64,7 @@ class Experiment:
                     torch.save(self.model.state_dict(), self.env.ckpt_dir / f"medsam_finetuned_{name}_dice_{score}.pth")
 
     def setup(self):
-        self.env = basic_experiment_setup(
-            config_dict=self._config_dict,
-            project='finetune_medsam', 
-            debug=self.config.debug,
-            use_wandb=self.config.wandb,
-        )
+        super().setup()
         train_ds = AlignedFilesDataset(
             split="train",
             transform=self.transform1,
@@ -148,20 +137,8 @@ class Experiment:
         # label = torch.tensor(item["grade"] != "Benign").long()
         return bmode, mask
 
-    def augment(self, bmode, mask): 
-        from torchvision.datapoints import Mask
-        from torchvision.transforms.v2 import RandomResizedCrop, RandomApply, Compose, RandomAffine
-        import torchvision
-        torchvision.disable_beta_transforms_warning()
-
-        augmentation = Compose([
-            RandomApply([RandomResizedCrop(1024, scale=(0.8, 1.0))], p=0.5),
-            RandomApply([RandomAffine(0, translate=(0.2, 0.2))], p=0.3),
-        ])
-        bmode, mask = augmentation(bmode, Mask(mask))
-        return bmode, mask
-
     def transform2(self, item):
+        """Transforms for the NCT dataset"""
         from torchvision import transforms as T
         from torchvision.transforms import InterpolationMode
         bmode = item["bmode"]
@@ -180,6 +157,19 @@ class Experiment:
         )(mask)
         return bmode, mask
                      
+    def augment(self, bmode, mask): 
+        from torchvision.datapoints import Mask
+        from torchvision.transforms.v2 import RandomResizedCrop, RandomApply, Compose, RandomAffine
+        import torchvision
+        torchvision.disable_beta_transforms_warning()
+
+        augmentation = Compose([
+            RandomApply([RandomResizedCrop(1024, scale=(0.8, 1.0))], p=0.5),
+            RandomApply([RandomAffine(0, translate=(0.2, 0.2))], p=0.3),
+        ])
+        bmode, mask = augmentation(bmode, Mask(mask))
+        return bmode, mask
+
     def train_epoch(self, model, optimizer, loader):
         model.train()
 

@@ -7,7 +7,6 @@ import torch
 from torch import distributed as dist
 from dataclasses import dataclass, field, asdict
 import pathlib
-from medAI.utils.job_submission import submit_job
 from simple_parsing import ArgumentParser, subgroups, Serializable
 import typing as tp
 
