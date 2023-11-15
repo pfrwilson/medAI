@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from dataclasses import dataclass, field
 import timm
 from timm.layers import create_classifier 
-
+import learn2learn as l2l
 
 @dataclass
 class FeatureExtractorConfig:
@@ -74,7 +74,7 @@ class YShapeModel(nn.Module):
         super().__init__()
 
         # Create the feature extractpr
-        self.feature_extractor = timm.create_model(
+        self.feature_extractor: nn.Module = timm.create_model(
             config.feature_extractor.model_name,
             num_classes=config.feature_extractor.num_classes,
             in_chans=config.feature_extractor.in_chans,
@@ -148,26 +148,63 @@ class MT3Model(nn.Module):
         
         # Create YShapeModel
         self.y_shape_model = YShapeModel(mt3_config.y_shape_config)
+        self.maml_model = l2l.algorithms.MAML(self.y_shape_model, lr=self.inner_lr, first_order=False)
         
+    def forward(self, images_aug_1, images_aug_2, images, labels, training=False):   
+        # # Get the features from the YShapeModel
+        # latent, proj, logits = self.y_shape_model(x, training=training, use_predictor=False)
+        
+        meta_batch_size = images_aug_1.shape[0]
+        
+        for batch_idx in range(meta_batch_size):
+            # Clone y_shape_model to get a new model for each batch in meta batch
+            spec_model = self.maml_model.clone()
+            
+            # Run the inner training loop
+            spec_model, byol_loss = self.inner_train_loop(images_aug_1[batch_idx], images_aug_2[batch_idx], spec_model)
+            
+            # Get the predictions 
+            _, _, logits = spec_model(images[batch_idx], training=training)
+            
+            # Get the cross entropy loss
+            ce_loss = F.cross_entropy(logits, labels[batch_idx])
+            
+            # Get the totall loss
+            total_loss = ce_loss + self.beta_byol * byol_loss
+            
+            # Backpropagate the total loss
+            if training:
+                # retain_graph=True to avoid RuntimeError. 
+                # Divide by meta_batch_size to get the average loss over the meta batch.
+                (total_loss/meta_batch_size).backward(retain_graph=True) 
                 
-    def forward(self, x):
-        # Define the forward pass
-        features = self.feature_extractor(x)
-        # Additional forward pass logic can be implemented here
-        # ...
-
-        return features
-
-    # Placeholder for the inner training loop (BYOL-like updates)
-    def inner_train_loop(self, images_aug_1, images_aug_2):
-        pass
-
-    # Placeholder for the method to update the meta model
-    def update_meta_model(self, updated_model, model, gradients):
-        pass
-
-    # Placeholder for the BYOL loss function
-    def byol_loss_fn(self, x, y):
-        pass
+        return logits, total_loss  
+        
+    def inner_train_loop(self, images_aug_1, images_aug_2, spec_model: l2l.algorithms.MAML):
+        for i in range(self.inner_steps + 1):
+            with torch.enable_grad(): # enable gradient for the inner loop during inference as well
+                _, r1, _ = spec_model(images_aug_1, use_predictor=True, training=True)
+                _, r2, _ = spec_model(images_aug_2, use_predictor=True, training=True)
+            
+            with torch.no_grad(): # disable gradient for the inner loop in all time
+                _, z1, _ = spec_model(images_aug_1, use_predictor=False, training=True)
+                _, z2, _ = spec_model(images_aug_2, use_predictor=False, training=True)
+            
+            # Calculate the loss
+            loss1 = self.byol_loss_fn(r1, z2.detach())
+            loss2 = self.byol_loss_fn(r2, z1.detach())
+            byol_loss = loss1 + loss2
+            
+            if i == self.inner_steps: # similar to mt3 original code (maybe useless)
+                break
+            # Update the model
+            spec_model.adapt(byol_loss)
+        
+        return spec_model, byol_loss
+   
+    def byol_loss_fn(self, r, z):
+        r = F.normalize(r, dim=1)
+        z = F.normalize(z, dim=1)
+        return 2 - 2 * (r * z).sum(dim=-1)
         
         
