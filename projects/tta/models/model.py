@@ -118,7 +118,7 @@ class YShapeModel(nn.Module):
             nn.Softmax(dim=-1)
             )
             
-    def forward(self, x, training=False, use_predictor=False):
+    def forward(self, x, training=False, use_predictor=False): #TODO: I guess training is useless here
         self.feature_extractor.train() if training else self.feature_extractor.eval()
         self.classifier.train() if training else self.classifier.eval()
         
@@ -148,17 +148,17 @@ class MT3Model(nn.Module):
         
         # Create YShapeModel
         self.y_shape_model = YShapeModel(mt3_config.y_shape_config)
-        self.maml_model = l2l.algorithms.MAML(self.y_shape_model, lr=self.inner_lr, first_order=False)
+        self.model = l2l.algorithms.MAML(self.y_shape_model, lr=self.inner_lr, first_order=False)
         
-    def forward(self, images_aug_1, images_aug_2, images, labels, training=False):   
-        # # Get the features from the YShapeModel
-        # latent, proj, logits = self.y_shape_model(x, training=training, use_predictor=False)
-        
+    def forward(self, images_aug_1, images_aug_2, images, labels, training=False):  
         meta_batch_size = images_aug_1.shape[0]
         
+        ce_loss_sum = 0
+        byol_loss_sum = 0
+        total_loss_sum = 0    
         for batch_idx in range(meta_batch_size):
             # Clone y_shape_model to get a new model for each batch in meta batch
-            spec_model = self.maml_model.clone()
+            spec_model = self.model.clone()
             
             # Run the inner training loop
             spec_model, byol_loss = self.inner_train_loop(images_aug_1[batch_idx], images_aug_2[batch_idx], spec_model)
@@ -172,13 +172,22 @@ class MT3Model(nn.Module):
             # Get the totall loss
             total_loss = ce_loss + self.beta_byol * byol_loss
             
+            # Sum the losses
+            ce_loss_sum += ce_loss.item()
+            byol_loss_sum += byol_loss.item()
+            total_loss_sum += total_loss.item()
+            
             # Backpropagate the total loss
             if training:
                 # retain_graph=True to avoid RuntimeError. 
                 # Divide by meta_batch_size to get the average loss over the meta batch.
                 (total_loss/meta_batch_size).backward(retain_graph=True) 
-                
-        return logits, total_loss  
+        
+        total_loss_avg = total_loss_sum/meta_batch_size
+        ce_loss_avg = ce_loss_sum/meta_batch_size
+        byol_loss_avg = byol_loss_sum/meta_batch_size
+        
+        return logits, total_loss_avg, ce_loss_avg, byol_loss_avg
         
     def inner_train_loop(self, images_aug_1, images_aug_2, spec_model: l2l.algorithms.MAML):
         for i in range(self.inner_steps + 1):
