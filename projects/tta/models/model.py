@@ -32,7 +32,7 @@ class YShapeConfig:
 class MT3Config:
     y_shape_config: YShapeConfig = YShapeConfig()
     inner_steps: int = 1
-    inner_lr: float = 0.1
+    inner_lr: float = 0.01
     beta_byol: float = 0.1 
 
 

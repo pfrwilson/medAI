@@ -16,21 +16,35 @@ from medAI.datasets import (
             AlignedFilesDataset,
         )
 
+from .models.model import MT3Model, MT3Config
+
+from timm.optim.optim_factory import create_optimizer
+
 from einops import rearrange, repeat
-import wandb
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import logging 
 
+
+@dataclass
+class OptimizerConfig:
+    opt: str = 'adam'
+    lr: float = 1e-3
+    weight_decay: float = 0.0
+        
 
 @dataclass
 class Config(BasicExperimentConfig):
     """Configuration for the experiment."""
-    project: str = "tta"
+    project: str = "MT3"
     epochs: int = 10 
+    batch_size: int = 1
+    fold: int = 0
+    use_augmentation: bool = False
+    model_config: MT3Config = MT3Config()
+    optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
-class MyExperiment(BasicExperiment): 
+class MT3Experiment(BasicExperiment): 
     config_class = Config
     config: Config
 
@@ -48,74 +62,107 @@ class MyExperiment(BasicExperiment):
             # )
             
     def setup(self):
+        # logging setup
         super().setup()
-        if 'experiment.ckpt' in os.listdir(self.ckpt_dir):
-            logging.info('Loading from checkpoint')
-            state = torch.load(os.path.join(self.ckpt_dir, 'experiment.ckpt'))
-        else: 
-            logging.info('No checkpoint found. Starting from scratch.')
+        self.setup_data()
+
+        if "experiment.ckpt" in os.listdir(self.ckpt_dir):
+            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
+        else:
             state = None
 
-        logging.info('Setting up datasets')
-        train_ds = AlignedFilesDataset(
-            split="train",
-            transform=self.transform1,
-        )
-        train_ds = train_ds + ExactNCT2013BModeImagesWithManualProstateSegmenation(
-            split="train",
-            transform=self.transform2,
-            cohort_selection_options=CohortSelectionOptions(),
-        )
-        train_ds = train_ds + ExactNCT2013BModeImagesWithManualProstateSegmenation(
-            split="val",
-            transform=self.transform2,
-            cohort_selection_options=CohortSelectionOptions(),
-        )
-        
-        test_datasets = {}
-        test_datasets['aligned_files'] = AlignedFilesDataset(
-            split="test",
-            transform=lambda item: self.transform1(item, augment=False),
-        )
-        test_datasets['nct'] = ExactNCT2013BModeImagesWithManualProstateSegmenation(
-            split="test",
-            transform=lambda item: self.transform2(item),
-            cohort_selection_options=CohortSelectionOptions(),
-        )
-        self.train_loader = DataLoader(
-            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
-        )
-        self.test_loaders = {
-            name: DataLoader(
-                test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
-            )
-            for name, test_ds in test_datasets.items()
-        }
-
         logging.info('Setting up model, optimizer, scheduler')
-        self.model = MedSAMForFinetuning(freeze_backbone=self.config.freeze_backbone)
+        self.model = MT3Model(mt3_config=self.config.model_config)
         self.model = self.model.cuda()
-        if state is not None:
-            self.model.load_state_dict(state["model"])
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.lr)
-        if state is not None:
-            self.optimizer.load_state_dict(state["optimizer"])
+        
+        self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
         )
+        
         if state is not None:
+            self.model.load_state_dict(state["model"])
+            self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
 
         logging.info(f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
-        logging.info(
-            f"""Trainable parameters: 
-{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"""
-        )
+        logging.info(f"""Trainable parameters: 
+                     {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}""")
 
         self.epoch = 0 if state is None else state["epoch"]
         self.best_score = 0 if state is None else state["best_score"]
+
+    def setup_data(self):
+        from torchvision.transforms import InterpolationMode
+        from torchvision.transforms import v2 as T
+        from torchvision.datapoints import Image, Mask
+
+        class Transform:
+            def __init__(self, augment=False):
+                self.augment = augment
+                self.size = (256, 256)
+            
+            def __call__(self, item):
+                bmode = item["bmode"]
+                bmode = T.ToTensor()(bmode)
+                bmode = T.Resize(self.size, antialias=True)(bmode)
+                bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
+                bmode = bmode.repeat(3, 1, 1)
+                bmode = Image(bmode)
+
+                needle_mask = item["needle_mask"]
+                needle_mask = T.ToTensor()(needle_mask).float() * 255
+                needle_mask = T.Resize(
+                    self.size, antialias=False, interpolation=InterpolationMode.NEAREST
+                )(needle_mask)
+                needle_mask = Mask(needle_mask)
+
+                prostate_mask = item["prostate_mask"]
+                prostate_mask = T.ToTensor()(prostate_mask).float() * 255
+                prostate_mask = T.Resize(
+                    self.size, antialias=False, interpolation=InterpolationMode.NEAREST
+                )(prostate_mask)
+                prostate_mask = Mask(prostate_mask)
+
+                if self.augment:
+                    bmode, needle_mask, prostate_mask = T.RandomAffine(
+                        degrees=0, translate=(0.1, 0.1)
+                    )(bmode, needle_mask, prostate_mask)
+
+                label = torch.tensor(item["grade"] != "Benign").long()
+                return bmode, needle_mask, prostate_mask, label
+
+        from medAI.datasets import ExactNCT2013BModeImages, CohortSelectionOptions, ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation
+
+        train_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+            split="train",
+            transform=Transform(augment=self.config.use_augmentation),
+            cohort_selection_options=CohortSelectionOptions(
+                benign_to_cancer_ratio=1,
+                min_involvement=40,
+                remove_benign_from_positive_patients=True,
+                fold=self.config.fold,
+            ),
+        )
+        test_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+            split="test",
+            transform=Transform(),
+            cohort_selection_options=CohortSelectionOptions(
+                benign_to_cancer_ratio=None, min_involvement=40, fold=self.config.fold
+            ),
+        )
+        if self.config.debug:
+            train_ds = torch.utils.data.Subset(train_ds, torch.arange(0, 100))
+            test_ds = torch.utils.data.Subset(test_ds, torch.arange(0, 100))
+
+        self.train_loader = DataLoader(
+            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
+        )
+        self.test_loader = DataLoader(
+            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+        )
 
     def save(self):
         torch.save(
@@ -131,6 +178,51 @@ class MyExperiment(BasicExperiment):
                 "experiment.ckpt",
             )
         )
+
+    def run_epoch(self, loader, train=True, desc="train"):
+        with torch.no_grad() if not train else torch.enable_grad():
+            self.model.train() if train else self.model.eval()
+
+            core_probs = []
+            core_labels = []
+            patch_probs = []
+            patch_labels = []
+            
+            for i, batch in enumerate(tqdm(loader, desc=desc)):
+                images_aug_1, images_aug_2, images, labels = batch
+                images_aug_1 = images_aug_1.cuda()
+                images_aug_2 = images_aug_2.cuda()
+                images = images.cuda()
+                labels = labels.cuda()
+                
+                # Zero gradients
+                if train:
+                    self.optimizer.zero_grad()
+                
+                (logits, 
+                total_loss_avg,
+                ce_loss_avg,
+                byol_loss_avg
+                ) = self.model(images_aug_1, images_aug_2, images, labels, training=train)
+
+                # Optimizer step
+                if train:
+                    # Loss already backwarded in the model
+                    self.optimizer.step()
+                    self.scheduler.step()
+                    wandb.log({"lr": self.scheduler.get_lr()[0]})
+                
+                wandb.log({
+                    f"{desc}_loss": total_loss_avg,
+                    f"{desc}_ce_loss": ce_loss_avg,
+                    f"{desc}_byol_loss": byol_loss_avg,
+                    })
+
+    def checkpoint(self):
+        self.save()
+        return super().checkpoint()
+
+
 
     def transform1(self, item, augment=True):
         pass
@@ -190,80 +282,6 @@ class MyExperiment(BasicExperiment):
         # )(mask)
         # return bmode, mask
       
-    def run_epoch(self, loader, train=True, desc="train"):
-        with torch.no_grad() if not train else torch.enable_grad():
-            self.model.train() if train else self.model.eval()
-
-            core_probs = []
-            core_labels = []
-            patch_probs = []
-            patch_labels = []
-            
-            for i, batch in enumerate(tqdm(loader, desc=desc)):
-                images_aug_1, images_aug_2, images, labels = batch
-                images_aug_1 = images_aug_1.cuda()
-                images_aug_2 = images_aug_2.cuda()
-                images = images.cuda()
-                labels = labels.cuda()
-                
-                optimizer.zero_grad()
-                
-                (logits, 
-                total_loss_avg,
-                ce_loss_avg,
-                byol_loss_avg
-                ) = self.model(images_aug_1, images_aug_2, images, labels, training=True)
-
-                # Loss already backwarded in the model
-                optimizer.step()
-                self.scheduler.step()
-                
-                wandb.log({
-                    "train_loss": total_loss_avg,
-                    "train_ce_loss": ce_loss_avg,
-                    "train_byol_loss": byol_loss_avg,
-                    "lr": self.scheduler.get_lr()[0]
-                    })
-
-    @torch.no_grad()
-    def eval_epoch(self, model, loader, name="test"):
-        model.eval()
-
-        for i, batch in enumerate(tqdm(loader)):
-            images_aug_1, images_aug_2, images, labels = batch
-            images_aug_1 = images_aug_1.cuda()
-            images_aug_2 = images_aug_2.cuda()
-            images = images.cuda()
-            labels = labels.cuda()
-                    
-            (logits, 
-             total_loss_avg,
-             ce_loss_avg,
-             byol_loss_avg
-             ) = self.model(images_aug_1, images_aug_2, images, labels, training=False)
-            
-            wandb.log({
-                f"{name}_loss": total_loss_avg,
-                f"{name}_ce_loss": ce_loss_avg,
-                f"{name}_byol_loss": byol_loss_avg,
-                })
-    
-    def checkpoint(self):
-        self.save()
-        return super().checkpoint()
-
-    def setup(self): 
-        super().setup()
-        from torch.utils.data import DataLoader
-        self.train_loader = DataLoader(range(100), batch_size=10, shuffle=True)
-
-    def __call__(self): 
-        self.setup()
-        for epoch in range(self.config.epochs): 
-            logging.info(f"Epoch {epoch}")
-            for batch in self.train_loader: 
-                wandb.log({"sum": sum(batch)})
-
 
 if __name__ == '__main__': 
-    MyExperiment.submit()
+    MT3Experiment.submit()
