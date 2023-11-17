@@ -35,7 +35,7 @@ class OptimizerConfig:
 @dataclass
 class Config(BasicExperimentConfig):
     """Configuration for the experiment."""
-    exp_dir: str = "first_test_exp" 
+    exp_dir: str = "logs/first_experiment_test" 
     group: str = None
     project: str = "MT3"
     entity: str = "mahdigilany"
