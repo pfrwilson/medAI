@@ -1,5 +1,8 @@
 import os
 from dotenv import load_dotenv
+# Loading environment variables
+load_dotenv()
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -12,8 +15,8 @@ import wandb
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 
-from .models.model import MT3Model, MT3Config
-from .utils.metrics import MetricCalculator
+from models.model import MT3Model, MT3Config
+from utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
 
@@ -32,13 +35,13 @@ class OptimizerConfig:
 @dataclass
 class Config(BasicExperimentConfig):
     """Configuration for the experiment."""
-    exp_dir: str = None 
+    exp_dir: str = "first_test_exp" 
     group: str = None
     project: str = "MT3"
     entity: str = "mahdigilany"
-    resume: bool = True
-    debug: bool = False
-    use_wandb: bool = True
+    resume: bool = False
+    debug: bool = True
+    use_wandb: bool = False
     
     epochs: int = 10 
     batch_size: int = 8
@@ -101,7 +104,7 @@ class MT3Experiment(BasicExperiment):
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
-        from torchvision.tv_tensors import Image as TVImage
+        from torchvision.datapoints import Image as TVImage
 
         class Transform:
             def __init__(selfT, augment=False):
@@ -139,7 +142,7 @@ class MT3Experiment(BasicExperiment):
                 return support_patches_aug1, support_patches_aug2, patch, label, item
 
 
-        from .datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig
+        from datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig
         train_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="train",
             transform=Transform(augment=False),
@@ -279,5 +282,4 @@ class MT3Experiment(BasicExperiment):
 
 
 if __name__ == '__main__': 
-    load_dotenv()
     MT3Experiment.submit()
