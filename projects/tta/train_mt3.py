@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import torch
 import torch.nn as nn
 import numpy as np
@@ -10,11 +11,6 @@ import wandb
 
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
-from medAI.datasets import (
-            ExactNCT2013BModeImagesWithManualProstateSegmenation,
-            CohortSelectionOptions,
-            AlignedFilesDataset,
-        )
 
 from .models.model import MT3Model, MT3Config
 
@@ -37,11 +33,14 @@ class Config(BasicExperimentConfig):
     """Configuration for the experiment."""
     project: str = "MT3"
     epochs: int = 10 
-    batch_size: int = 1
+    batch_size: int = 8
     fold: int = 0
     use_augmentation: bool = False
+    min_invovlement: int = 40
+    num_support_patches: int = 10
     model_config: MT3Config = MT3Config()
     optimizer_config: OptimizerConfig = OptimizerConfig()
+    debug: bool = False
 
 
 class MT3Experiment(BasicExperiment): 
@@ -97,68 +96,87 @@ class MT3Experiment(BasicExperiment):
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
-        from torchvision.datapoints import Image, Mask
+        from torchvision.tv_tensors import Image, Mask
 
         class Transform:
-            def __init__(self, augment=False):
-                self.augment = augment
-                self.size = (256, 256)
+            def __init__(selfT, augment=False):
+                selfT.augment = augment
+                selfT.size = (256, 256)
             
-            def __call__(self, item):
-                bmode = item["bmode"]
-                bmode = T.ToTensor()(bmode)
-                bmode = T.Resize(self.size, antialias=True)(bmode)
-                bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
-                bmode = bmode.repeat(3, 1, 1)
-                bmode = Image(bmode)
+            def __call__(selfT, item):
+                patch = item["patch"]
+                patch = patch[None, ...]
+                patch = (patch - patch.min()) / (patch.max() - patch.min())
+                patch = Image(patch)
+                patch = T.ToTensor()(patch)
+                patch = T.Resize(selfT.size, antialias=True)(patch)
 
-                needle_mask = item["needle_mask"]
-                needle_mask = T.ToTensor()(needle_mask).float() * 255
-                needle_mask = T.Resize(
-                    self.size, antialias=False, interpolation=InterpolationMode.NEAREST
-                )(needle_mask)
-                needle_mask = Mask(needle_mask)
-
-                prostate_mask = item["prostate_mask"]
-                prostate_mask = T.ToTensor()(prostate_mask).float() * 255
-                prostate_mask = T.Resize(
-                    self.size, antialias=False, interpolation=InterpolationMode.NEAREST
-                )(prostate_mask)
-                prostate_mask = Mask(prostate_mask)
-
-                if self.augment:
-                    bmode, needle_mask, prostate_mask = T.RandomAffine(
-                        degrees=0, translate=(0.1, 0.1)
-                    )(bmode, needle_mask, prostate_mask)
-
+                support_patches = item["support_patches"]
+                support_patches = support_patches[self.config.num_support_patches, None, ...]
+                # Normalize support patches along last two dimensions
+                support_patches = (support_patches - support_patches.min(dim=(2, 3), keepdim=True)) \
+                / (support_patches.max(dim=(2, 3), keepdim=True) \
+                    - support_patches.min(dim=(2, 3), keepdim=True))
+                support_patches = Image(support_patches)
+                support_patches = T.ToTensor()(support_patches)
+                support_patches = T.Resize(selfT.size, antialias=True)(support_patches)
+                
+                # Augment support patches
+                transform = T.compose([
+                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                    T.RandomHorizontalFlip(p=0.5),
+                    T.RandomVerticalFlip(p=0.5),
+                ])   
+                support_patches_aug1, support_patches_aug2 = transform(support_patches, support_patches)
+             
                 label = torch.tensor(item["grade"] != "Benign").long()
-                return bmode, needle_mask, prostate_mask, label
+                return support_patches_aug1, support_patches_aug2, patch, label
 
-        from medAI.datasets import ExactNCT2013BModeImages, CohortSelectionOptions, ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation
 
-        train_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+        from .datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig
+        train_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="train",
             transform=Transform(augment=self.config.use_augmentation),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=1,
-                min_involvement=40,
+                min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
             ),
+            support_patch_config=SupportPatchConfig(
+                num_support_patches=self.config.num_support_patches
+            ),
+            debug=self.config.debug,
         )
-        test_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+        
+        val_ds = ExactNCT2013RFPatchesWithSupportPatches(
+            split="val",
+            transform=Transform(),
+            cohort_selection_options=CohortSelectionOptions(
+                benign_to_cancer_ratio=None,
+                min_involvement=self.config.min_invovlement,
+                fold=self.config.fold
+            ),
+            debug=self.config.debug,
+        )
+                
+        test_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="test",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None, min_involvement=40, fold=self.config.fold
+                benign_to_cancer_ratio=None,
+                min_involvement=self.config.min_invovlement,
+                fold=self.config.fold
             ),
+            debug=self.config.debug,
         )
-        if self.config.debug:
-            train_ds = torch.utils.data.Subset(train_ds, torch.arange(0, 100))
-            test_ds = torch.utils.data.Subset(test_ds, torch.arange(0, 100))
+
 
         self.train_loader = DataLoader(
             train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
+        )
+        self.val_loader = DataLoader(
+            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
         self.test_loader = DataLoader(
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
@@ -284,4 +302,5 @@ class MT3Experiment(BasicExperiment):
       
 
 if __name__ == '__main__': 
+    load_dotenv()
     MT3Experiment.submit()
