@@ -13,6 +13,7 @@ import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 
 from .models.model import MT3Model, MT3Config
+from .utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
 
@@ -31,16 +32,21 @@ class OptimizerConfig:
 @dataclass
 class Config(BasicExperimentConfig):
     """Configuration for the experiment."""
+    exp_dir: str = None 
+    group: str = None
     project: str = "MT3"
+    entity: str = "mahdigilany"
+    resume: bool = True
+    debug: bool = False
+    use_wandb: bool = True
+    
     epochs: int = 10 
     batch_size: int = 8
     fold: int = 0
-    use_augmentation: bool = False
     min_invovlement: int = 40
     num_support_patches: int = 10
     model_config: MT3Config = MT3Config()
     optimizer_config: OptimizerConfig = OptimizerConfig()
-    debug: bool = False
 
 
 class MT3Experiment(BasicExperiment): 
@@ -55,15 +61,14 @@ class MT3Experiment(BasicExperiment):
             for name, test_loader in self.test_loaders.items():
                 self.run_epoch(self.test_loader, train=False, desc=name)
             
-            #TODO: save model
-            # torch.save(self.model.medsam_model.state_dict(), 
-            #     os.path.join(self.ckpt_dir, f"medsam-finetuned_image_encoder_epoch={self.epoch}.pth")
-            # )
+            if self.best_score_updated:
+                self.save_states()
             
     def setup(self):
         # logging setup
         super().setup()
         self.setup_data()
+        self.setup_metrics()        
 
         if "experiment.ckpt" in os.listdir(self.ckpt_dir):
             state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
@@ -96,7 +101,7 @@ class MT3Experiment(BasicExperiment):
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
-        from torchvision.tv_tensors import Image, Mask
+        from torchvision.tv_tensors import Image as TVImage
 
         class Transform:
             def __init__(selfT, augment=False):
@@ -104,39 +109,40 @@ class MT3Experiment(BasicExperiment):
                 selfT.size = (256, 256)
             
             def __call__(selfT, item):
-                patch = item["patch"]
-                patch = patch[None, ...]
+                patch = item.pop("patch")
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
-                patch = Image(patch)
+                patch = TVImage(patch)
                 patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch)
 
-                support_patches = item["support_patches"]
-                support_patches = support_patches[self.config.num_support_patches, None, ...]
+                support_patches = item.pop("support_patches")
                 # Normalize support patches along last two dimensions
-                support_patches = (support_patches - support_patches.min(dim=(2, 3), keepdim=True)) \
-                / (support_patches.max(dim=(2, 3), keepdim=True) \
-                    - support_patches.min(dim=(2, 3), keepdim=True))
-                support_patches = Image(support_patches)
+                support_patches = (support_patches - support_patches.min(axis=(1, 2), keepdims=True)) \
+                / (support_patches.max(axis=(1,2), keepdims=True) \
+                    - support_patches.min(axis=(1, 2), keepdims=True))
+                support_patches = TVImage(support_patches)
                 support_patches = T.ToTensor()(support_patches)
                 support_patches = T.Resize(selfT.size, antialias=True)(support_patches)
                 
                 # Augment support patches
-                transform = T.compose([
+                transform = T.Compose([
                     T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
                     T.RandomHorizontalFlip(p=0.5),
                     T.RandomVerticalFlip(p=0.5),
                 ])   
                 support_patches_aug1, support_patches_aug2 = transform(support_patches, support_patches)
-             
+                
+                if selfT.augment:
+                    patch = transform(patch)
+                
                 label = torch.tensor(item["grade"] != "Benign").long()
-                return support_patches_aug1, support_patches_aug2, patch, label
+                return support_patches_aug1, support_patches_aug2, patch, label, item
 
 
         from .datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig
         train_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="train",
-            transform=Transform(augment=self.config.use_augmentation),
+            transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=1,
                 min_involvement=self.config.min_invovlement,
@@ -182,7 +188,10 @@ class MT3Experiment(BasicExperiment):
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
 
-    def save(self):
+    def setup_metrics(self):
+        self.metric_calculator = MetricCalculator()
+    
+    def save_states(self):
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -200,14 +209,10 @@ class MT3Experiment(BasicExperiment):
     def run_epoch(self, loader, train=True, desc="train"):
         with torch.no_grad() if not train else torch.enable_grad():
             self.model.train() if train else self.model.eval()
-
-            core_probs = []
-            core_labels = []
-            patch_probs = []
-            patch_labels = []
+            
             
             for i, batch in enumerate(tqdm(loader, desc=desc)):
-                images_aug_1, images_aug_2, images, labels = batch
+                images_aug_1, images_aug_2, images, labels, meta_data = batch
                 images_aug_1 = images_aug_1.cuda()
                 images_aug_2 = images_aug_2.cuda()
                 images = images.cuda()
@@ -229,77 +234,49 @@ class MT3Experiment(BasicExperiment):
                     self.optimizer.step()
                     self.scheduler.step()
                     wandb.log({"lr": self.scheduler.get_lr()[0]})
+                             
+                # Update metrics   
+                self.metric_calculator.update(
+                    batch_meta_data = meta_data,
+                    logits = logits.detach().cpu().numpy(),
+                    labels = labels.detach().cpu().numpy(),
+                )
                 
-                wandb.log({
-                    f"{desc}_loss": total_loss_avg,
-                    f"{desc}_ce_loss": ce_loss_avg,
-                    f"{desc}_byol_loss": byol_loss_avg,
-                    })
-
+                # Log losses
+                self.log_losses(total_loss_avg, ce_loss_avg, byol_loss_avg, desc)
+            
+            # Log metrics every epoch
+            self.log_metrics(desc)
+                
+    
+    def log_losses(self, total_loss_avg, ce_loss_avg, byol_loss_avg, desc):
+        wandb.log({
+            f"{desc}_loss": total_loss_avg,
+            f"{desc}_ce_loss": ce_loss_avg,
+            f"{desc}_byol_loss": byol_loss_avg,
+            })
+        
+    def log_metrics(self, desc):
+        metrics = self.metric_calculator.get_metrics()
+        
+        # Reset metrics for each epoch
+        self.metric_calculator.reset()
+        
+        # Update best score
+        (
+            self.best_score_updated,
+            self.best_score
+            ) = self.metric_calculator.update_best_score(metrics, desc)
+        
+        # Log metrics
+        wandb.log({
+            f"{desc}/{key}": value for key, value in metrics.items()
+            })
+    
     def checkpoint(self):
-        self.save()
+        self.save_states()
         return super().checkpoint()
 
-
-
-    def transform1(self, item, augment=True):
-        pass
-        # """Transforms for the aligned files dataset"""
-        # from torchvision import transforms as T
-        
-        # from torchvision.transforms import InterpolationMode
-        # bmode = item["image"]
-        # bmode = T.ToTensor()(bmode)
-        # bmode = T.Resize((1024, 1024), antialias=True)(bmode)
-        # bmode = (bmode - bmode.min() ) / (bmode.max() - bmode.min())
-        # bmode = bmode.repeat(3, 1, 1)
-        # mask = item["mask"]
-        # mask = mask.astype("uint8")
-        # mask = T.ToTensor()(mask).float() 
-        # mask = T.Resize(
-        #     (1024, 1024), antialias=False, interpolation=InterpolationMode.NEAREST
-        # )(mask)
-
-        # if augment: 
-        #     bmode, mask = self.augment(bmode, mask)
-
-        # # label = torch.tensor(item["grade"] != "Benign").long()
-        # return bmode, mask
-
-    def augment(self, bmode, mask): 
-        pass
-        # from torchvision.datapoints import Mask
-        # from torchvision.transforms.v2 import RandomResizedCrop, RandomApply, Compose, RandomAffine
-        # import torchvision
-        # torchvision.disable_beta_transforms_warning()
-
-        # augmentation = Compose([
-        #     RandomApply([RandomResizedCrop(1024, scale=(0.8, 1.0))], p=0.5),
-        #     RandomApply([RandomAffine(0, translate=(0.2, 0.2))], p=0.3),
-        # ])
-        # bmode, mask = augmentation(bmode, Mask(mask))
-        # return bmode, mask
-
-    def transform2(self, item):
-        pass
-        # from torchvision import transforms as T
-        # from torchvision.transforms import InterpolationMode
-        # bmode = item["bmode"]
-        # bmode = np.flip(bmode, axis=0).copy()
-        # bmode = T.ToTensor()(bmode)
-        # bmode = T.Resize((1024, 1024), antialias=True)(bmode)
-        # bmode = (bmode - bmode.min() ) / (bmode.max() - bmode.min())
-        # bmode = bmode.repeat(3, 1, 1)
-        # mask = item["prostate_mask"]
-        # mask = np.flip(mask, axis=0).copy()
-        # mask = mask.astype("uint8")
-        # mask = T.ToTensor()(mask).float() * 255 
-        
-        # mask = T.Resize(
-        #     (1024, 1024), antialias=False, interpolation=InterpolationMode.NEAREST
-        # )(mask)
-        # return bmode, mask
-      
 
 if __name__ == '__main__': 
     load_dotenv()

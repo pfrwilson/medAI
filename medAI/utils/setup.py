@@ -146,6 +146,7 @@ class BasicExperimentConfig(Serializable):
     exp_dir: str = None 
     group: str = None
     project: str = None
+    entity: str = None
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True
@@ -241,6 +242,7 @@ class BasicExperiment:
         
         wandb.init(
             project=self.config.project if not self.config.debug else f'{self.config.project}-debug',
+            entity=self.config.entity,
             group=self.config.group,
             config=_config_dict,
             resume='allow',
