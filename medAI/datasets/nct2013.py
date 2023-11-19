@@ -319,7 +319,6 @@ class _ExactNCT2013DatasetWithAutomaticProstateSegmentation(
         self.masks_dir = masks_dir
         super().__init__(dataset, transform)
         
-
     def prostate_mask(self, core_id):
         tag = self.dataset.tag_for_core_id(core_id)
         image = Image.open(os.path.join(self.masks_dir, f"{tag}.png"))
@@ -343,7 +342,7 @@ class ExactNCT2013BmodeImagesWithManualProstateSegmentation(
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
     ):
         super().__init__(
-            ExactNCT2013BModeImages(split, transform, cohort_selection_options),
+            ExactNCT2013BModeImages(split, None, cohort_selection_options),
             transform,
         )
 
@@ -359,7 +358,7 @@ class ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
         masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
     ):
         super().__init__(
-            ExactNCT2013BModeImages(split, transform, cohort_selection_options),
+            ExactNCT2013BModeImages(split, None, cohort_selection_options),
             transform,
             masks_dir,
         )
@@ -375,7 +374,7 @@ class ExactNCT2013RFImagesWithManualProstateSegmentation(
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
     ):
         super().__init__(
-            ExactNCT2013RFImages(split, transform, cohort_selection_options),
+            ExactNCT2013RFImages(split, None, cohort_selection_options),
             transform,
         )
 
@@ -391,7 +390,7 @@ class ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
         masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
     ):
         super().__init__(
-            ExactNCT2013RFImages(split, transform, cohort_selection_options),
+            ExactNCT2013RFImages(split, None, cohort_selection_options),
             transform,
             masks_dir,
         )
