@@ -302,7 +302,6 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
             
         return support_positions, query_positions
 
-
     def __getitem__(self, index):
         i, j = self._indices[index]
         item = self.dataset[i]

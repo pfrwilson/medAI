@@ -98,7 +98,7 @@ class YShapeModel(nn.Module):
         
         
         self.projector = PPModelMLP(
-            input_size=self.feature_extractor.feature_info[-1]['num_chs'],
+            input_size=config.proj_hidden_size, # self.feature_extractor.feature_info[-1]['num_chs'],
             hidden_size=config.proj_hidden_size,
             projection_size=config.proj_size,
             use_mlp_norm=config.use_mlp_norm,
@@ -118,11 +118,11 @@ class YShapeModel(nn.Module):
             nn.Softmax(dim=-1)
             )
             
-    def forward(self, x, training=False, use_predictor=False): #TODO: I guess training is useless here
+    def forward(self, x, training=False, use_predictor=False): #TODO: I guess train() is useless here
         self.feature_extractor.train() if training else self.feature_extractor.eval()
         self.classifier.train() if training else self.classifier.eval()
         
-        latent = self.feature_extractor(x)
+        latent = self.feature_extractor(x)[-1]
         latent = F.relu(self.last_bn(latent))
         latent = self.global_pool(latent)
         latent = F.relu(self.pre_hidden(latent)) 
@@ -150,8 +150,9 @@ class MT3Model(nn.Module):
         self.y_shape_model = YShapeModel(mt3_config.y_shape_config)
         self.model = l2l.algorithms.MAML(self.y_shape_model, lr=self.inner_lr, first_order=False)
         
-    def forward(self, images_aug_1, images_aug_2, images, labels, training=False):  
-        meta_batch_size = images_aug_1.shape[0]
+    def forward(self, batch_images_aug_1, batch_images_aug_2, images, labels, training=False):  
+        meta_batch_size = batch_images_aug_1.shape[0]
+        num_support_imgs = batch_images_aug_1.shape[1]
         
         ce_loss_sum = 0
         byol_loss_sum = 0
@@ -160,14 +161,18 @@ class MT3Model(nn.Module):
             # Clone y_shape_model to get a new model for each batch in meta batch
             spec_model = self.model.clone()
             
+            # Get task augmented images
+            task_imgs_aug1 = batch_images_aug_1[batch_idx][:, None, ...]
+            task_imgs_aug2 = batch_images_aug_2[batch_idx][:, None, ...]
+            
             # Run the inner training loop
-            spec_model, byol_loss = self.inner_train_loop(images_aug_1[batch_idx], images_aug_2[batch_idx], spec_model)
+            spec_model, byol_loss = self.inner_train_loop(task_imgs_aug1, task_imgs_aug2, spec_model)
             
             # Get the predictions 
-            _, _, logits = spec_model(images[batch_idx], training=training)
+            _, _, logits = spec_model(images, training=training)
             
             # Get the cross entropy loss
-            ce_loss = F.cross_entropy(logits, labels[batch_idx])
+            ce_loss = F.cross_entropy(logits[batch_idx], labels[batch_idx])
             
             # Get the totall loss
             total_loss = ce_loss + self.beta_byol * byol_loss
@@ -207,9 +212,9 @@ class MT3Model(nn.Module):
             if i == self.inner_steps: # similar to mt3 original code (maybe useless)
                 break
             # Update the model
-            spec_model.adapt(byol_loss)
+            spec_model.adapt(byol_loss.mean(), allow_unused=True)
         
-        return spec_model, byol_loss
+        return spec_model, byol_loss.mean()
    
     def byol_loss_fn(self, r, z):
         r = F.normalize(r, dim=1)

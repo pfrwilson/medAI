@@ -20,8 +20,8 @@ class MetricCalculator(object):
         self.core_id_labels = {}
 
     def update(self, batch_meta_data, logits, labels):
-        for meta_data in batch_meta_data:
-            id = meta_data["id"]
+        for id_tensor in batch_meta_data["id"]:
+            id = id_tensor.item()
             
             if id in self.core_id_logits:
                 self.core_id_logits[id].append(logits)
@@ -36,27 +36,33 @@ class MetricCalculator(object):
         return patch_metrics.update(core_metrics)
     
     def get_patch_metrics(self):
-        logits = np.asarray(
-            [np.asarray(logits_list) for logits_list in self.core_id_logits.values()]
+        logits = np.concatenate(
+            [np.concatenate(logits_list) for logits_list in self.core_id_logits.values()]
             )
-        labels = np.asarray(
-            [np.asarray(labels_list) for labels_list in self.core_id_labels.values()]
+        labels = np.concatenate(
+            [np.concatenate(labels_list) for labels_list in self.core_id_labels.values()]
             )
         return self._get_metrics(logits, labels, prefix="patch_")
     
     def get_core_metrics(self):
         
         if self.avg_core_logits_first:
-            logits = np.asarray(
-                [np.mean(logits_list, axis=0) for logits_list in self.core_id_logits.values()]
+            logits = np.concatenate(
+                [np.mean(
+                    np.concatenate(logits_list),
+                    axis=0
+                    ) for logits_list in self.core_id_logits.values()]
                 )          
         else:
             logits = np.asarray(
-                [np.argmax(logits_list, axis=1) for logits_list in self.core_id_logits.values()]
+                [np.mean(
+                    np.argmax(np.concatenate(logits_list), axis=1),
+                    axis=0
+                    ) for logits_list in self.core_id_logits.values()]
                 )
 
         labels = np.asarray(
-            [labels_list[0] for labels_list in self.core_id_labels.values()]
+            [labels_list[0][0] for labels_list in self.core_id_labels.values()]
             )
             
         return self._get_metrics(logits, labels, prefix="core_")

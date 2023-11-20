@@ -14,8 +14,8 @@ import wandb
 
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
-
-from models.model import MT3Model, MT3Config
+from baseline_experiment import BaselineExperiment, BaselineConfig, OptimizerConfig
+from models.mt3_model import MT3Model, MT3Config
 from utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
@@ -26,19 +26,9 @@ import matplotlib.pyplot as plt
 
 
 @dataclass
-class OptimizerConfig:
-    opt: str = 'adam'
-    lr: float = 1e-3
-    weight_decay: float = 0.0
-        
-
-@dataclass
-class Config(BasicExperimentConfig):
+class MT3Config(BaselineConfig):
     """Configuration for the experiment."""
-    exp_dir: str = "logs/first_experiment_test" 
-    group: str = None
-    project: str = "MT3"
-    entity: str = "mahdigilany"
+    exp_dir: str = "./projects/tta/logs/first_experiment_test" 
     resume: bool = False
     debug: bool = True
     use_wandb: bool = False
@@ -52,54 +42,9 @@ class Config(BasicExperimentConfig):
     optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
-class MT3Experiment(BasicExperiment): 
-    config_class = Config
-    config: Config
-
-    def __call__(self):
-        self.setup()
-        for self.epoch in range(self.epoch, self.config.epochs):
-            print(f"Epoch {self.epoch}")
-            self.run_epoch(self.train_loader, train=True, desc="train")
-            for name, test_loader in self.test_loaders.items():
-                self.run_epoch(self.test_loader, train=False, desc=name)
-            
-            if self.best_score_updated:
-                self.save_states()
-            
-    def setup(self):
-        # logging setup
-        super().setup()
-        self.setup_data()
-        self.setup_metrics()        
-
-        if "experiment.ckpt" in os.listdir(self.ckpt_dir):
-            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
-        else:
-            state = None
-
-        logging.info('Setting up model, optimizer, scheduler')
-        self.model = MT3Model(mt3_config=self.config.model_config)
-        self.model = self.model.cuda()
-        
-        self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
-        self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
-            self.optimizer,
-            warmup_epochs=5 * len(self.train_loader),
-            max_epochs=self.config.epochs * len(self.train_loader),
-        )
-        
-        if state is not None:
-            self.model.load_state_dict(state["model"])
-            self.optimizer.load_state_dict(state["optimizer"])
-            self.scheduler.load_state_dict(state["scheduler"])
-
-        logging.info(f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
-        logging.info(f"""Trainable parameters: 
-                     {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}""")
-
-        self.epoch = 0 if state is None else state["epoch"]
-        self.best_score = 0 if state is None else state["best_score"]
+class MT3Experiment(BaselineExperiment): 
+    config_class = MT3Config
+    config: MT3Config
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -166,6 +111,9 @@ class MT3Experiment(BasicExperiment):
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
             ),
+            support_patch_config=SupportPatchConfig(
+                num_support_patches=self.config.num_support_patches
+            ),
             debug=self.config.debug,
         )
                 
@@ -176,6 +124,9 @@ class MT3Experiment(BasicExperiment):
                 benign_to_cancer_ratio=None,
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
+            ),
+            support_patch_config=SupportPatchConfig(
+                num_support_patches=self.config.num_support_patches
             ),
             debug=self.config.debug,
         )
@@ -191,24 +142,10 @@ class MT3Experiment(BasicExperiment):
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
 
-    def setup_metrics(self):
-        self.metric_calculator = MetricCalculator()
+    def setup_model(self):
+        model = MT3Model(self.config.model_config)
+        return model
     
-    def save_states(self):
-        torch.save(
-            {
-                "model": self.model.state_dict(),
-                "optimizer": self.optimizer.state_dict(),
-                "scheduler": self.scheduler.state_dict(),
-                "epoch": self.epoch,
-                "best_score": self.best_score,
-            },
-            os.path.join(
-                self.ckpt_dir,
-                "experiment.ckpt",
-            )
-        )
-
     def run_epoch(self, loader, train=True, desc="train"):
         with torch.no_grad() if not train else torch.enable_grad():
             self.model.train() if train else self.model.eval()
@@ -247,38 +184,20 @@ class MT3Experiment(BasicExperiment):
                 
                 # Log losses
                 self.log_losses(total_loss_avg, ce_loss_avg, byol_loss_avg, desc)
+                
+                # Break if debug
+                if self.config.debug and i > 1:
+                    break
             
             # Log metrics every epoch
             self.log_metrics(desc)
                 
-    
     def log_losses(self, total_loss_avg, ce_loss_avg, byol_loss_avg, desc):
         wandb.log({
             f"{desc}_loss": total_loss_avg,
             f"{desc}_ce_loss": ce_loss_avg,
             f"{desc}_byol_loss": byol_loss_avg,
             })
-        
-    def log_metrics(self, desc):
-        metrics = self.metric_calculator.get_metrics()
-        
-        # Reset metrics for each epoch
-        self.metric_calculator.reset()
-        
-        # Update best score
-        (
-            self.best_score_updated,
-            self.best_score
-            ) = self.metric_calculator.update_best_score(metrics, desc)
-        
-        # Log metrics
-        wandb.log({
-            f"{desc}/{key}": value for key, value in metrics.items()
-            })
-    
-    def checkpoint(self):
-        self.save_states()
-        return super().checkpoint()
 
 
 if __name__ == '__main__': 
