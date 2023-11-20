@@ -131,6 +131,7 @@ class ExactNCT2013RFPatches(Dataset):
         prescale_image: bool = False,
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
         patch_options: PatchOptions = PatchOptions(),
+        debug: bool = False,
     ):
         super().__init__()
         self.patch_options = patch_options
@@ -153,7 +154,7 @@ class ExactNCT2013RFPatches(Dataset):
             patch_options.needle_mask_threshold,
         ))
         self.positions = [] 
-        for i in tqdm(range(len(self.dataset)), desc="Computing positions"): 
+        for i in tqdm(range(len(self.dataset)), desc=f"Computing positions {split}"): 
             positions = self.base_positions.copy()
             positions = list(compute_mask_intersections(
                 positions,
@@ -163,10 +164,17 @@ class ExactNCT2013RFPatches(Dataset):
                 patch_options.prostate_mask_threshold,
             ))
             self.positions.append(positions)
+            
+            if debug and i > 10:
+                break 
+            
         self._indices = []
         for i in range(len(self.dataset)):
             for j in range(len(self.positions[i])):
                 self._indices.append((i, j))
+            
+            if debug and i > 10:
+                break
 
     def __getitem__(self, index):
         i, j = self._indices[index]
@@ -229,7 +237,7 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
         
         self.support_positions = []
         self.query_positions = [] 
-        for i in tqdm(range(len(self.dataset)), desc="Computing positions"): 
+        for i in tqdm(range(len(self.dataset)), desc=f"Computing positions {split}"): 
             # updates self.query_positions and self.support_positions
             (support_possitions,
              query_positions

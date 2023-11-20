@@ -1,6 +1,7 @@
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from typing import Dict, List, Tuple
-import numpy as np
+# import numpy as np
+import torch
 import torchmetrics
 
 
@@ -42,34 +43,28 @@ class MetricCalculator(object):
         return patch_metrics
     
     def get_patch_metrics(self):
-        logits = np.concatenate(
-            [np.asarray(logits_list) for logits_list in self.core_id_logits.values()]
+        logits = torch.cat(
+            [torch.stack(logits_list) for logits_list in self.core_id_logits.values()]
             )
-        labels = np.concatenate(
-            [np.asarray(labels_list) for labels_list in self.core_id_labels.values()]
+        labels = torch.cat(
+            [torch.tensor(labels_list) for labels_list in self.core_id_labels.values()]
             )
-        return self._get_metrics(logits, logits.argmax(axis=1), labels, prefix="patch_")
+        return self._get_metrics(logits, logits.argmax(dim=1), labels, prefix="patch_")
     
     def get_core_metrics(self):
-        
         if self.avg_core_logits_first:
-            logits = np.concatenate(
-                [np.mean(
-                    np.asarray(logits_list),
-                    axis=0
-                    ) for logits_list in self.core_id_logits.values()]
+            logits = torch.cat(
+                [torch.stack(logits_list).mean(dim=0) for logits_list in self.core_id_logits.values()]
                 )          
-            predicted_labels = logits.argmax(axis=1)
+            predicted_labels = logits.argmax(dim=1)
         else:
-            logits = np.array(
-                [np.mean(
-                    np.argmax(np.asarray(logits_list), axis=1),
-                    axis=0
-                    ) for logits_list in self.core_id_logits.values()]
+            logits = torch.stack(
+                [torch.stack(logits_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
+                for logits_list in self.core_id_logits.values()]
                 )
             predicted_labels = logits >= 0.5
 
-        labels = np.asarray(
+        labels = torch.stack(
             [labels_list[0] for labels_list in self.core_id_labels.values()]
             )
             
@@ -80,9 +75,9 @@ class MetricCalculator(object):
         for metric in self.list_of_metrics:
             metric_name: str = metric.__name__
             try:
-                metric_value: float = metric(logits, labels, task="binary")
+                metric_value: float = metric(logits, labels, task="multiclass", num_classes=2)
             except:
-                metric_value: float = metric(predicted_labels, labels, task="binary", num_classes=2)
+                metric_value: float = metric(logits, labels, task="binary")
             metrics[prefix + metric_name] = metric_value
         return metrics
 
@@ -90,11 +85,11 @@ class MetricCalculator(object):
         if desc == "train":
             self.best_score_updated = False
             
-        if desc == "val" and metrics["core_roc_auc_score"] > self.best_score:
-                self.best_score = metrics["core_roc_auc_score"]
+        if desc == "val" and metrics["core_auroc"] > self.best_score:
+                self.best_score = metrics["core_auroc"]
                 self.best_score_updated = True
             
         if desc == "test" and self.best_score_updated:
-            self.best_score_test = metrics["core_roc_auc_score"]
+            self.best_score_test = metrics["core_auroc"]
         
         return self.best_score_updated, self.best_score

@@ -142,6 +142,12 @@ class MT3Experiment(BaselineExperiment):
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
 
+
+        self.test_loaders = {
+            "val": self.val_loader,
+            "test": self.test_loader
+        }
+        
     def setup_model(self):
         model = MT3Model(self.config.model_config)
         return model

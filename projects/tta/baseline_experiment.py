@@ -42,7 +42,7 @@ class FeatureExtractorConfig:
 @dataclass
 class OptimizerConfig:
     opt: str = 'adam'
-    lr: float = 1e-3
+    lr: float = 1e-4
     weight_decay: float = 0.0
     momentum: float = 0.9
 
@@ -55,8 +55,8 @@ class BaselineConfig(BasicExperimentConfig):
     project: str = "tta"
     entity: str = "mahdigilany"
     resume: bool = False
-    debug: bool = True
-    use_wandb: bool = False
+    debug: bool = False
+    use_wandb: bool = True
     
     epochs: int = 10
     batch_size: int = 32
@@ -193,6 +193,11 @@ class BaselineExperiment(BasicExperiment):
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
 
+        self.test_loaders = {
+            "val": self.val_loader,
+            "test": self.test_loader
+        }
+        
     def setup_metrics(self):
         self.metric_calculator = MetricCalculator()
     
@@ -238,14 +243,13 @@ class BaselineExperiment(BasicExperiment):
                 if train:
                     self.optimizer.zero_grad()
                 
-                logits = self.model(images)[-1]
+                logits = self.model(images)
                 
                 loss: nn.CrossEntropyLoss = nn.CrossEntropyLoss()(logits, labels)
-                loss.backward()                
                 
                 # Optimizer step
                 if train:
-                    # Loss already backwarded in the model
+                    loss.backward()                
                     self.optimizer.step()
                     self.scheduler.step()
                     wandb.log({"lr": self.scheduler.get_lr()[0]})
@@ -253,23 +257,23 @@ class BaselineExperiment(BasicExperiment):
                 # Update metrics   
                 self.metric_calculator.update(
                     batch_meta_data = meta_data,
-                    logits = logits.detach().cpu().numpy(),
-                    labels = labels.detach().cpu().numpy(),
+                    logits = logits.detach().cpu(),
+                    labels = labels.detach().cpu(),
                 )
                 
                 # Log losses
                 self.log_losses(loss, desc)
                 
                 # Break if debug
-                if self.config.debug and i > 5:
-                    break
+                # if self.config.debug and i > 1:
+                #     break
             
             # Log metrics every epoch
             self.log_metrics(desc)
                 
     def log_losses(self, batch_loss_avg, desc):
         wandb.log({
-            f"{desc}_loss": batch_loss_avg,
+            f"{desc}/loss": batch_loss_avg,
             })
         
     def log_metrics(self, desc):
@@ -292,6 +296,7 @@ class BaselineExperiment(BasicExperiment):
     def checkpoint(self):
         self.save_states()
         return super().checkpoint()
+
 
 
 if __name__ == '__main__': 
