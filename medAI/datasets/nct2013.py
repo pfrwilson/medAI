@@ -239,28 +239,113 @@ class ExactNCT2013RFImages(ExactNCT2013Cores):
         split="train",
         transform=None,
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cache=False,
     ):
         super().__init__(split, cohort_selection_options)
         self.needle_mask = np.load(
             os.path.join(BMODE_DATA_PATH, "needle_mask.npy"), mmap_mode="r"
         )
         self.transform = transform
+        self.cache = cache 
+        self._cache = {}
 
     def __getitem__(self, index):
+        if self.cache and index in self._cache:
+            return self._cache[index]
+        
         core_info = super().__getitem__(index)
         tag = core_info["tag"]
         out = {}
         out.update(core_info)
         out["needle_mask"] = self.needle_mask
         out["rf_image"] = np.load(
-            os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy")
+            os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy"), 
+            mmap_mode="r"
         )
+        if self.transform is not None:
+            out = self.transform(out)
+
+        if self.cache:
+            self._cache[index] = out
+
+        return out
+
+
+class _ExactNCT2013DatasetWithProstateSegmentation(ABC):
+    def __init__(self, dataset: ExactNCT2013Cores, transform=None):
+        self.dataset = dataset
+        self.transform = transform
+
+        available_masks = [
+            id for id in self.dataset.core_info.id.values if self.prostate_mask_available(id)
+        ]
+        self.dataset.core_info = self.dataset.core_info[
+            self.dataset.core_info.id.isin(available_masks)
+        ]
+
+    def __len__(self):
+        return len(self.dataset)
+
+    @abstractmethod
+    def prostate_mask_available(self, core_id):
+        ...
+
+    @abstractmethod
+    def prostate_mask(self, core_id):
+        ...
+
+    def __getitem__(self, index):
+        out = self.dataset[index]
+        out["prostate_mask"] = self.prostate_mask(out["id"])
         if self.transform is not None:
             out = self.transform(out)
         return out
 
 
-class ExactNCT2013BModeImagesWithProstateSegmenation(ExactNCT2013BModeImages, ABC):
+class _ExactNCT2013DatasetWithManualProstateSegmentation(
+    _ExactNCT2013DatasetWithProstateSegmentation
+):
+    def prostate_mask_available(self, core_id):
+        tag = self.dataset.tag_for_core_id(core_id)
+        return os.path.exists(
+            os.path.join(DATA_ROOT, "cores_dataset", tag, "prostate_mask.npy")
+        )
+
+    def prostate_mask(self, core_id):
+        tag = self.dataset.tag_for_core_id(core_id)
+        return np.load(
+            os.path.join(DATA_ROOT, "cores_dataset", tag, "prostate_mask.npy")
+        )
+
+
+class _ExactNCT2013DatasetWithAutomaticProstateSegmentation(
+    _ExactNCT2013DatasetWithProstateSegmentation
+):
+    def __init__(
+        self,
+        dataset: ExactNCT2013Cores,
+        transform=None,
+        masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
+    ):
+        self.masks_dir = masks_dir
+        super().__init__(dataset, transform)
+        
+    def prostate_mask(self, core_id):
+        tag = self.dataset.tag_for_core_id(core_id)
+        image = Image.open(os.path.join(self.masks_dir, f"{tag}.png"))
+        image = (np.array(image) / 255) > 0.5
+        image = image.astype(np.uint8)
+        image = np.flip(image, axis=0).copy()
+        return image
+
+    def prostate_mask_available(self, core_id):
+        tag = self.dataset.tag_for_core_id(core_id)
+        return f"{tag}.png" in os.listdir(self.masks_dir)
+
+
+class ExactNCT2013BmodeImagesWithManualProstateSegmentation(
+    _ExactNCT2013DatasetWithManualProstateSegmentation
+):
     def __init__(
         self,
         split="train",
@@ -268,53 +353,13 @@ class ExactNCT2013BModeImagesWithProstateSegmenation(ExactNCT2013BModeImages, AB
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
     ):
         super().__init__(
-            split,
-            transform=None,
-            cohort_selection_options=cohort_selection_options,
-        )
-        self.transform = transform
-        available_masks = [
-            id for id in self.core_info.id.values if self.prostate_mask_available(id)
-        ]
-        self.core_info = self.core_info[self.core_info.id.isin(available_masks)]
-
-    @abstractmethod
-    def prostate_mask_available(self, core_id):
-        ...
-
-    @abstractmethod
-    def prostate_mask(self, core_id):
-        ...
-
-    def __getitem__(self, index: int) -> tp.Tuple[tp.Any, tp.Any]:
-        tmp_transform = self.transform
-        self.transform = None
-        out = super().__getitem__(index)
-        self.transform = tmp_transform
-        out["prostate_mask"] = self.prostate_mask(out["id"])
-        if self.transform is not None:
-            out = self.transform(out)
-        return out
-
-
-class ExactNCT2013BModeImagesWithManualProstateSegmenation(
-    ExactNCT2013BModeImagesWithProstateSegmenation
-):
-    def prostate_mask_available(self, core_id):
-        tag = self.tag_for_core_id(core_id)
-        return os.path.exists(
-            os.path.join(DATA_ROOT, "cores_dataset", tag, "prostate_mask.npy")
-        )
-
-    def prostate_mask(self, core_id):
-        tag = self.tag_for_core_id(core_id)
-        return np.load(
-            os.path.join(DATA_ROOT, "cores_dataset", tag, "prostate_mask.npy")
+            ExactNCT2013BModeImages(split, None, cohort_selection_options),
+            transform,
         )
 
 
 class ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
-    ExactNCT2013BModeImagesWithProstateSegmenation
+    _ExactNCT2013DatasetWithAutomaticProstateSegmentation
 ):
     def __init__(
         self,
@@ -323,20 +368,45 @@ class ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
         masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
     ):
-        self.masks_dir = masks_dir
-        super().__init__(split, transform, cohort_selection_options)
+        super().__init__(
+            ExactNCT2013BModeImages(split, None, cohort_selection_options),
+            transform,
+            masks_dir,
+        )
 
-    def prostate_mask(self, core_id):
-        tag = self.tag_for_core_id(core_id)
-        image = Image.open(os.path.join(self.masks_dir, f"{tag}.png"))
-        image = (np.array(image) / 255) > 0.5
-        image = image.astype(np.uint8)
-        image = np.flip(image, axis=0).copy()
-        return image
 
-    def prostate_mask_available(self, core_id):
-        tag = self.tag_for_core_id(core_id)
-        return f"{tag}.png" in os.listdir(self.masks_dir)
+class ExactNCT2013RFImagesWithManualProstateSegmentation(
+    _ExactNCT2013DatasetWithManualProstateSegmentation
+):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+    ):
+        super().__init__(
+            ExactNCT2013RFImages(split, None, cohort_selection_options),
+            transform,
+        )
+
+
+class ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
+    _ExactNCT2013DatasetWithAutomaticProstateSegmentation
+):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cache=False,
+        masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
+    ):
+        super().__init__(
+            ExactNCT2013RFImages(split, None, cohort_selection_options, cache=cache),
+            transform,
+            masks_dir,
+        )
+
 
 """ 
 def extract_patches(
@@ -454,7 +524,7 @@ def compute_mask_intersections(
             yield position_datum
 
 
-def select_patch(image, position_dict, patch_options): 
+def select_patch(image, position_dict, patch_options):
     xmin_mm, ymin_mm, xmax_mm, ymax_mm = position_dict.pop("position")
 
     # we shift the patch by a random amount
@@ -488,45 +558,40 @@ def select_patch(image, position_dict, patch_options):
     return image_patch, position_dict
 
 
-class ExactNCT2013BmodePatches(Dataset):
-    def __init__(
-        self,
-        split="train",
-        transform=None,
-        prescale_image: bool = False,
-        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
-        patch_options: PatchOptions = PatchOptions(),
-    ):
+class _ExactNCTPatchesDataset(Dataset):
+    def __init__(self, dataset: _ExactNCT2013DatasetWithAutomaticProstateSegmentation, item_name_for_patches, prescale_image=True, transform=None, patch_options: PatchOptions = None):
         super().__init__()
-        self.patch_options = patch_options
+        self.dataset = dataset
+        self.item_name_for_patches = item_name_for_patches
         self.transform = transform
+        self.patch_options = patch_options
         self.prescale_image = prescale_image
-        self.split = split
-        self.dataset = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
-            split, transform=None, cohort_selection_options=cohort_selection_options
-        )
 
-        self.base_positions = list(compute_base_positions(
-            (28, 46.06), patch_options
-        )) 
-        _needle_mask = resize(self.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False)
-        self.base_positions = list(compute_mask_intersections(
-            self.base_positions,
-            _needle_mask,
-            "needle",
-            (28, 46.06),
-            patch_options.needle_mask_threshold,
-        ))
-        self.positions = [] 
-        for i in tqdm(range(len(self.dataset)), desc="Computing positions"): 
-            positions = self.base_positions.copy()
-            positions = list(compute_mask_intersections(
-                positions,
-                self.dataset[i]["prostate_mask"],
-                "prostate",
+        self.base_positions = list(compute_base_positions((28, 46.06), patch_options))
+        _needle_mask = resize(
+            self.dataset.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False
+        )
+        self.base_positions = list(
+            compute_mask_intersections(
+                self.base_positions,
+                _needle_mask,
+                "needle",
                 (28, 46.06),
-                patch_options.prostate_mask_threshold,
-            ))
+                patch_options.needle_mask_threshold,
+            )
+        )
+        self.positions = []
+        for i in tqdm(range(len(self.dataset)), desc="Computing positions"):
+            positions = self.base_positions.copy()
+            positions = list(
+                compute_mask_intersections(
+                    positions,
+                    self.dataset[i]["prostate_mask"],
+                    "prostate",
+                    (28, 46.06),
+                    patch_options.prostate_mask_threshold,
+                )
+            )
             self.positions.append(positions)
         self._indices = []
         for i in range(len(self.dataset)):
@@ -536,8 +601,8 @@ class ExactNCT2013BmodePatches(Dataset):
     def __getitem__(self, index):
         i, j = self._indices[index]
         item = self.dataset[i]
-        image = item.pop("bmode")
-        if self.prescale_image: 
+        image = item.pop(self.item_name_for_patches)
+        if self.prescale_image:
             image = (image - image.min()) / (image.max() - image.min())
 
         item.pop("needle_mask")
@@ -556,6 +621,130 @@ class ExactNCT2013BmodePatches(Dataset):
             item = self.transform(item)
 
         return item
-    
+
     def __len__(self):
         return len(self._indices)
+
+
+class ExactNCT2013BmodePatches(_ExactNCTPatchesDataset):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        prescale_image: bool = False,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        patch_options: PatchOptions = PatchOptions(),
+    ):
+        dataset = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+            split, transform=None, cohort_selection_options=cohort_selection_options
+        )
+        super().__init__(
+            dataset,
+            "bmode",
+            prescale_image=prescale_image,
+            transform=transform,
+            patch_options=patch_options,
+        )
+
+
+class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        prescale_image: bool = False,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        patch_options: PatchOptions = PatchOptions(),
+    ):
+        dataset = ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
+            split, transform=None, cohort_selection_options=cohort_selection_options, cache=True
+        )
+        super().__init__(
+            dataset,
+            "rf_image",
+            prescale_image=prescale_image,
+            transform=transform,
+            patch_options=patch_options,
+        )
+
+
+""" 
+
+class ExactNCT2013BmodePatches(Dataset):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        prescale_image: bool = False,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        patch_options: PatchOptions = PatchOptions(),
+    ):
+        super().__init__()
+        self.patch_options = patch_options
+        self.transform = transform
+        self.prescale_image = prescale_image
+        self.split = split
+        self.dataset = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
+            split, transform=None, cohort_selection_options=cohort_selection_options
+        )
+
+        self.base_positions = list(compute_base_positions((28, 46.06), patch_options))
+        _needle_mask = resize(
+            self.dataset.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False
+        )
+        self.base_positions = list(
+            compute_mask_intersections(
+                self.base_positions,
+                _needle_mask,
+                "needle",
+                (28, 46.06),
+                patch_options.needle_mask_threshold,
+            )
+        )
+        self.positions = []
+        for i in tqdm(range(len(self.dataset)), desc="Computing positions"):
+            positions = self.base_positions.copy()
+            positions = list(
+                compute_mask_intersections(
+                    positions,
+                    self.dataset[i]["prostate_mask"],
+                    "prostate",
+                    (28, 46.06),
+                    patch_options.prostate_mask_threshold,
+                )
+            )
+            self.positions.append(positions)
+        self._indices = []
+        for i in range(len(self.dataset)):
+            for j in range(len(self.positions[i])):
+                self._indices.append((i, j))
+
+    def __getitem__(self, index):
+        i, j = self._indices[index]
+        item = self.dataset[i]
+        image = item.pop("bmode")
+        if self.prescale_image:
+            image = (image - image.min()) / (image.max() - image.min())
+
+        item.pop("needle_mask")
+        item.pop("prostate_mask")
+
+        item["label"] = item["grade"] != "Benign"
+
+        position = self.positions[i][j]
+
+        image_patch, position = select_patch(image, position, self.patch_options)
+
+        item["patch"] = image_patch
+        item.update(position)
+
+        if self.transform is not None:
+            item = self.transform(item)
+
+        return item
+
+    def __len__(self):
+        return len(self._indices)
+
+
+ """
