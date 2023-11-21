@@ -239,24 +239,35 @@ class ExactNCT2013RFImages(ExactNCT2013Cores):
         split="train",
         transform=None,
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cache=False,
     ):
         super().__init__(split, cohort_selection_options)
         self.needle_mask = np.load(
             os.path.join(BMODE_DATA_PATH, "needle_mask.npy"), mmap_mode="r"
         )
         self.transform = transform
+        self.cache = cache 
+        self._cache = {}
 
     def __getitem__(self, index):
+        if self.cache and index in self._cache:
+            return self._cache[index]
+        
         core_info = super().__getitem__(index)
         tag = core_info["tag"]
         out = {}
         out.update(core_info)
         out["needle_mask"] = self.needle_mask
         out["rf_image"] = np.load(
-            os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy")
+            os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy"), 
+            mmap_mode="r"
         )
         if self.transform is not None:
             out = self.transform(out)
+
+        if self.cache:
+            self._cache[index] = out
+
         return out
 
 
@@ -387,10 +398,11 @@ class ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
         split="train",
         transform=None,
         cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cache=False,
         masks_dir="/ssd005/projects/exactvu_pca/nct_segmentations_medsam_finetuned_2023-11-10",
     ):
         super().__init__(
-            ExactNCT2013RFImages(split, None, cohort_selection_options),
+            ExactNCT2013RFImages(split, None, cohort_selection_options, cache=cache),
             transform,
             masks_dir,
         )
@@ -645,7 +657,7 @@ class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
         patch_options: PatchOptions = PatchOptions(),
     ):
         dataset = ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
-            split, transform=None, cohort_selection_options=cohort_selection_options
+            split, transform=None, cohort_selection_options=cohort_selection_options, cache=True
         )
         super().__init__(
             dataset,
