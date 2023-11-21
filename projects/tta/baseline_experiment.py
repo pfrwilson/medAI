@@ -27,7 +27,7 @@ import timm
 
 @dataclass
 class FeatureExtractorConfig:
-    model_name: str = 'resnet14t'
+    model_name: str = 'resnet10t'
     num_classes: int = 2
     in_chans: int = 1
     features_only: bool = False # return features only, not logits
@@ -55,7 +55,7 @@ class BaselineConfig(BasicExperimentConfig):
     project: str = "tta"
     entity: str = "mahdigilany"
     resume: bool = False
-    debug: bool = False
+    debug: bool = True
     use_wandb: bool = True
     
     epochs: int = 10
@@ -87,7 +87,7 @@ class BaselineExperiment(BasicExperiment):
         self.setup_data()
         self.setup_metrics()        
 
-        if "experiment.ckpt" in os.listdir(self.ckpt_dir):
+        if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
             state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
         else:
             state = None
@@ -98,6 +98,8 @@ class BaselineExperiment(BasicExperiment):
         self.model.double()
         
         self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
+        # import torch.optim as optim
+        # self.optimizer = optim.Adam(self.model.parameters(), lr=1e-4)
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
@@ -119,7 +121,8 @@ class BaselineExperiment(BasicExperiment):
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
-        from torchvision.datapoints import Image as TVImage
+        # from torchvision.datapoints import Image as TVImage
+        from torchvision.tv_tensors import Image as TVImage
 
         class Transform:
             def __init__(selfT, augment=False):
@@ -131,16 +134,15 @@ class BaselineExperiment(BasicExperiment):
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
                 patch = T.ToTensor()(patch)
-                patch = T.Resize(selfT.size, antialias=True)(patch)
-                
-                # Augment support patches
-                transform = T.Compose([
-                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-                    T.RandomHorizontalFlip(p=0.5),
-                    T.RandomVerticalFlip(p=0.5),
-                ])   
+                patch = T.Resize(selfT.size, antialias=True)(patch) 
                 
                 if selfT.augment:
+                    # Augment support patches
+                    transform = T.Compose([
+                        T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                        T.RandomHorizontalFlip(p=0.5),
+                        T.RandomVerticalFlip(p=0.5),
+                    ])  
                     patch = transform(patch)
                 
                 label = torch.tensor(item["grade"] != "Benign").long()
@@ -208,10 +210,16 @@ class BaselineExperiment(BasicExperiment):
             num_classes=self.config.model_config.num_classes,
             in_chans=self.config.model_config.in_chans,
             features_only=self.config.model_config.features_only,
-            norm_layer=lambda channels: nn.GroupNorm(
-                num_groups=self.config.model_config.num_groups, num_channels=channels
-                )
+            # norm_layer=lambda channels: nn.GroupNorm(
+            #     num_groups=self.config.model_config.num_groups, num_channels=channels
+            #     )
             )       
+        
+        # from models.resnet import resnet10
+        # model = resnet10(
+        #     num_classes=self.config.model_config.num_classes,
+        #     in_channels=self.config.model_config.in_chans
+        #     )
         return model
     
     def save_states(self):
@@ -233,6 +241,7 @@ class BaselineExperiment(BasicExperiment):
         with torch.no_grad() if not train else torch.enable_grad():
             self.model.train() if train else self.model.eval()
             
+            criterion = nn.CrossEntropyLoss()
             
             for i, batch in enumerate(tqdm(loader, desc=desc)):
                 images, labels, meta_data = batch
@@ -245,14 +254,14 @@ class BaselineExperiment(BasicExperiment):
                 
                 logits = self.model(images)
                 
-                loss: nn.CrossEntropyLoss = nn.CrossEntropyLoss()(logits, labels)
+                loss = criterion(logits, labels)
                 
                 # Optimizer step
                 if train:
                     loss.backward()                
                     self.optimizer.step()
                     self.scheduler.step()
-                    wandb.log({"lr": self.scheduler.get_lr()[0]})
+                    wandb.log({"lr": self.scheduler.get_last_lr()[0]})
                              
                 # Update metrics   
                 self.metric_calculator.update(

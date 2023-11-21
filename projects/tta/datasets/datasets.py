@@ -165,7 +165,7 @@ class ExactNCT2013RFPatches(Dataset):
             ))
             self.positions.append(positions)
             
-            if debug and i > 10:
+            if debug and i > 100:
                 break 
             
         self._indices = []
@@ -173,7 +173,7 @@ class ExactNCT2013RFPatches(Dataset):
             for j in range(len(self.positions[i])):
                 self._indices.append((i, j))
             
-            if debug and i > 10:
+            if debug and i > 100:
                 break
 
     def __getitem__(self, index):
