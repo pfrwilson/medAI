@@ -42,9 +42,11 @@ class Registry:
         return cls
 
     def build_from_config(self, config):
-        name = config.__name__ 
-        _config_dict = config.__dict__.copy()
-        _config_dict.pop("__name__")
+        if isinstance(config, dict): 
+            _config_dict = config
+        else: 
+            _config_dict = config.__dict__.copy()
+        name = _config_dict.pop("__name__")
         cls, config_cls = self._registry[name]
         return cls(**_config_dict)
     
