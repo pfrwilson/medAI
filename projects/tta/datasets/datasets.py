@@ -202,7 +202,7 @@ class ExactNCT2013RFPatches(Dataset):
     
     def __len__(self):
         return len(self._indices)
-    
+
 
 @dataclass
 class SupportPatchConfig:

@@ -149,7 +149,7 @@ class BaselineExperiment(BasicExperiment):
                 return patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFPatches, CohortSelectionOptions, SupportPatchConfig
+        from datasets.datasets import ExactNCT2013RFPatches, CohortSelectionOptions 
         train_ds = ExactNCT2013RFPatches(
             split="train",
             transform=Transform(augment=False),
