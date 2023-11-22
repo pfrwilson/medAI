@@ -56,7 +56,7 @@ class BaselineConfig(BasicExperimentConfig):
     entity: str = "mahdigilany"
     resume: bool = False
     debug: bool = True
-    use_wandb: bool = True
+    use_wandb: bool = False
     
     epochs: int = 10
     batch_size: int = 32
@@ -148,8 +148,9 @@ class BaselineExperiment(BasicExperiment):
                 return patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFPatches, CohortSelectionOptions 
-        train_ds = ExactNCT2013RFPatches(
+        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions 
+        
+        train_ds = ExactNCT2013RFImagePatches(
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
@@ -161,7 +162,7 @@ class BaselineExperiment(BasicExperiment):
             debug=self.config.debug,
         )
         
-        val_ds = ExactNCT2013RFPatches(
+        val_ds = ExactNCT2013RFImagePatches(
             split="val",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
@@ -172,7 +173,7 @@ class BaselineExperiment(BasicExperiment):
             debug=self.config.debug,
         )
                 
-        test_ds = ExactNCT2013RFPatches(
+        test_ds = ExactNCT2013RFImagePatches(
             split="test",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
@@ -212,13 +213,7 @@ class BaselineExperiment(BasicExperiment):
             # norm_layer=lambda channels: nn.GroupNorm(
             #     num_groups=self.config.model_config.num_groups, num_channels=channels
             #     )
-            )       
-        
-        # from models.resnet import resnet10
-        # model = resnet10(
-        #     num_classes=self.config.model_config.num_classes,
-        #     in_channels=self.config.model_config.in_chans
-        #     )
+            )
         return model
     
     def save_states(self):
@@ -273,16 +268,17 @@ class BaselineExperiment(BasicExperiment):
                 self.log_losses(loss, desc)
                 
                 # Break if debug
-                # if self.config.debug and i > 1:
-                #     break
+                if self.config.debug and i > 1:
+                    break
             
             # Log metrics every epoch
             self.log_metrics(desc)
                 
     def log_losses(self, batch_loss_avg, desc):
-        wandb.log({
-            f"{desc}/loss": batch_loss_avg,
-            })
+        wandb.log(
+            {f"{desc}/loss": batch_loss_avg},
+            commit=False
+            )
         
     def log_metrics(self, desc):
         metrics = self.metric_calculator.get_metrics()
@@ -297,9 +293,10 @@ class BaselineExperiment(BasicExperiment):
             ) = self.metric_calculator.update_best_score(metrics, desc)
         
         # Log metrics
-        wandb.log({
-            f"{desc}/{key}": value for key, value in metrics.items()
-            })
+        wandb.log(
+            {f"{desc}/{key}": value for key, value in metrics.items()},
+            commit=True
+            )
     
     def checkpoint(self):
         self.save_states()

@@ -1,4 +1,3 @@
-# from sklearn.model_selection import StratifiedKFold, train_test_split
 import os
 import pandas as pd
 import typing as tp
@@ -15,7 +14,10 @@ from medAI.utils.image_utils import (
 )
 from skimage.transform import resize
 
-from medAI.datasets.nct2013 import *
+from medAI.datasets.nct2013 import DATA_ROOT, ExactNCT2013RFImages
+from medAI.datasets.nct2013 import ExactNCT2013RFImagesWithAutomaticProstateSegmentation
+from medAI.datasets.nct2013 import _ExactNCT2013DatasetWithAutomaticProstateSegmentation
+from medAI.datasets.nct2013 import compute_base_positions, compute_mask_intersections, select_patch
 
 
 RF_DATA_PATH = os.path.join(DATA_ROOT, "cores_dataset")
@@ -43,7 +45,7 @@ class PatchOptions:
     shift_delta_mm: float = 0.0  # whether to randomly shift the patch by a small amount
     # output_size_px: tp.Tuple[int, int] | None = None # if not None, then the patch is resized to this size in pixels
 
-
+'''
 class ExactNCT2013RFImagesWithProstateSegmenation(ExactNCT2013RFImages, ABC):
     def __init__(
         self,
@@ -121,6 +123,7 @@ class ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
     def prostate_mask_available(self, core_id):
         tag = self.tag_for_core_id(core_id)
         return f"{tag}.png" in os.listdir(self.masks_dir)
+
 
 
 class ExactNCT2013RFPatches(Dataset):
@@ -202,6 +205,112 @@ class ExactNCT2013RFPatches(Dataset):
     
     def __len__(self):
         return len(self._indices)
+'''
+
+class _ExactNCTPatchesDataset(Dataset):
+    def __init__(
+        self, dataset: _ExactNCT2013DatasetWithAutomaticProstateSegmentation,
+        item_name_for_patches,
+        prescale_image=True,
+        transform=None,
+        patch_options: PatchOptions = None,
+        debug: bool = False,
+        ):
+        super().__init__()
+        self.dataset = dataset
+        self.item_name_for_patches = item_name_for_patches
+        self.transform = transform
+        self.patch_options = patch_options
+        self.prescale_image = prescale_image
+
+        self.base_positions = list(compute_base_positions((28, 46.06), patch_options))
+        _needle_mask = resize(
+            self.dataset.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False
+        )
+        self.base_positions = list(
+            compute_mask_intersections(
+                self.base_positions,
+                _needle_mask,
+                "needle",
+                (28, 46.06),
+                patch_options.needle_mask_threshold,
+            )
+        )
+        self.positions = []
+        for i in tqdm(range(len(self.dataset)), desc="Computing positions"):
+            positions = self.base_positions.copy()
+            positions = list(
+                compute_mask_intersections(
+                    positions,
+                    self.dataset[i]["prostate_mask"],
+                    "prostate",
+                    (28, 46.06),
+                    patch_options.prostate_mask_threshold,
+                )
+            )
+            self.positions.append(positions)
+            
+            if debug and i > 100:
+                break
+            
+        self._indices = []
+        for i in range(len(self.dataset)):
+            for j in range(len(self.positions[i])):
+                self._indices.append((i, j))
+            
+            if debug and i > 100:
+                break
+
+    def __getitem__(self, index):
+        i, j = self._indices[index]
+        item = self.dataset[i]
+        image = item.pop(self.item_name_for_patches)
+        if self.prescale_image:
+            image = (image - image.min()) / (image.max() - image.min())
+
+        item.pop("needle_mask")
+        item.pop("prostate_mask")
+
+        item["label"] = item["grade"] != "Benign"
+
+        position = self.positions[i][j]
+
+        image_patch, position = select_patch(image, position, self.patch_options)
+
+        item["patch"] = image_patch
+        item.update(position)
+
+        if self.transform is not None:
+            item = self.transform(item)
+
+        return item
+
+    def __len__(self):
+        return len(self._indices)
+
+
+class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        prescale_image: bool = False,
+        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        patch_options: PatchOptions = PatchOptions(),
+        debug: bool = False,
+    ):
+        dataset = ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
+            split, transform=None, cohort_selection_options=cohort_selection_options, cache=True
+        )
+        super().__init__(
+            dataset,
+            "rf_image",
+            prescale_image=prescale_image,
+            transform=transform,
+            patch_options=patch_options,
+            debug=debug,
+        )
+
 
 
 @dataclass
