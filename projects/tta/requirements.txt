@@ -14,3 +14,4 @@ simple_parsing
 ipykernel
 wandb
 submitit
+coolname

@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+import typing as tp
 import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -50,20 +51,29 @@ class OptimizerConfig:
 @dataclass
 class BaselineConfig(BasicExperimentConfig):
     """Configuration for the experiment."""
-    exp_dir: str = "./projects/tta/logs/first_experiment_test" 
+    # exp_dir: str = "./projects/tta/logs/first_experiment_test" 
+    name: str = "group_norm"
     group: str = None
     project: str = "tta"
     entity: str = "mahdigilany"
     resume: bool = False
-    debug: bool = True
-    use_wandb: bool = False
+    debug: bool = False
+    use_wandb: bool = True
     
-    epochs: int = 10
+    epochs: int = 100
     batch_size: int = 32
     fold: int = 0
+    
     min_invovlement: int = 40
+    needle_mask_threshold: float = 0.5
+    prostate_mask_threshold: float = 0.5
+    patch_size_mm: tp.Tuple[float, float] = (5, 5)
+    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig = OptimizerConfig()
+    
+        
 
 
 class BaselineExperiment(BasicExperiment): 
@@ -132,7 +142,8 @@ class BaselineExperiment(BasicExperiment):
                 patch = item.pop("patch")
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
-                patch = T.ToTensor()(patch)
+                # patch = T.ToImage()(patch)
+                # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
                 
                 if selfT.augment:
@@ -148,7 +159,7 @@ class BaselineExperiment(BasicExperiment):
                 return patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions 
+        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions, PatchOptions
         
         train_ds = ExactNCT2013RFImagePatches(
             split="train",
@@ -159,6 +170,11 @@ class BaselineExperiment(BasicExperiment):
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
             ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
+            ),
             debug=self.config.debug,
         )
         
@@ -166,9 +182,14 @@ class BaselineExperiment(BasicExperiment):
             split="val",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
+            ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             debug=self.config.debug,
         )
@@ -177,9 +198,14 @@ class BaselineExperiment(BasicExperiment):
             split="test",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
+            ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             debug=self.config.debug,
         )
@@ -210,9 +236,9 @@ class BaselineExperiment(BasicExperiment):
             num_classes=self.config.model_config.num_classes,
             in_chans=self.config.model_config.in_chans,
             features_only=self.config.model_config.features_only,
-            # norm_layer=lambda channels: nn.GroupNorm(
-            #     num_groups=self.config.model_config.num_groups, num_channels=channels
-            #     )
+            norm_layer=lambda channels: nn.GroupNorm(
+                num_groups=self.config.model_config.num_groups, num_channels=channels
+                )
             )
         return model
     
@@ -267,16 +293,17 @@ class BaselineExperiment(BasicExperiment):
                 # Log losses
                 self.log_losses(loss, desc)
                 
-                # Break if debug
-                if self.config.debug and i > 1:
-                    break
+                # # Break if debug
+                # if self.config.debug and i > 1:
+                #     break
             
             # Log metrics every epoch
             self.log_metrics(desc)
-                
+
+            
     def log_losses(self, batch_loss_avg, desc):
         wandb.log(
-            {f"{desc}/loss": batch_loss_avg},
+            {f"{desc}/loss": batch_loss_avg, "epoch": self.epoch},
             commit=False
             )
         
@@ -293,8 +320,12 @@ class BaselineExperiment(BasicExperiment):
             ) = self.metric_calculator.update_best_score(metrics, desc)
         
         # Log metrics
+        metrics_dict = {
+            f"{desc}/{key}": value for key, value in metrics.items()
+            }
+        metrics_dict.update({"epoch": self.epoch})
         wandb.log(
-            {f"{desc}/{key}": value for key, value in metrics.items()},
+            metrics_dict,
             commit=True
             )
     
