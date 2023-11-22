@@ -49,7 +49,8 @@ class MT3Experiment(BaselineExperiment):
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
-        from torchvision.datapoints import Image as TVImage
+        # from torchvision.datapoints import Image as TVImage
+        from torchvision.tv_tensors import Image as TVImage
 
         class Transform:
             def __init__(selfT, augment=False):
@@ -61,7 +62,7 @@ class MT3Experiment(BaselineExperiment):
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
                 patch = T.ToTensor()(patch)
-                patch = T.Resize(selfT.size, antialias=True)(patch)
+                patch = T.Resize(selfT.size, antialias=True)(patch).float()
 
                 support_patches = item.pop("support_patches")
                 # Normalize support patches along last two dimensions
@@ -70,7 +71,7 @@ class MT3Experiment(BaselineExperiment):
                     - support_patches.min(axis=(1, 2), keepdims=True))
                 support_patches = TVImage(support_patches)
                 support_patches = T.ToTensor()(support_patches)
-                support_patches = T.Resize(selfT.size, antialias=True)(support_patches)
+                support_patches = T.Resize(selfT.size, antialias=True)(support_patches).float()
                 
                 # Augment support patches
                 transform = T.Compose([

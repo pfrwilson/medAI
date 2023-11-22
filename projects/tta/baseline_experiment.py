@@ -95,7 +95,6 @@ class BaselineExperiment(BasicExperiment):
         logging.info('Setting up model, optimizer, scheduler')
         self.model = self.setup_model()
         self.model = self.model.cuda()
-        self.model.double()
         
         self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
         # import torch.optim as optim
@@ -134,7 +133,7 @@ class BaselineExperiment(BasicExperiment):
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
                 patch = T.ToTensor()(patch)
-                patch = T.Resize(selfT.size, antialias=True)(patch) 
+                patch = T.Resize(selfT.size, antialias=True)(patch).float()
                 
                 if selfT.augment:
                     # Augment support patches
