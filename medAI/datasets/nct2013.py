@@ -251,23 +251,24 @@ class ExactNCT2013RFImages(ExactNCT2013Cores):
 
     def __getitem__(self, index):
         if self.cache and index in self._cache:
-            return self._cache[index]
-        
-        core_info = super().__getitem__(index)
-        tag = core_info["tag"]
-        out = {}
-        out.update(core_info)
-        out["needle_mask"] = self.needle_mask
-        out["rf_image"] = np.load(
-            os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy"), 
-            mmap_mode="r"
-        )
+            out = self._cache[index].copy()
+
+        else: 
+            core_info = super().__getitem__(index)
+            tag = core_info["tag"]
+            out = {}
+            out.update(core_info)
+            out["needle_mask"] = self.needle_mask
+            out["rf_image"] = np.load(
+                os.path.join(DATA_ROOT, "cores_dataset", tag, "image.npy"), 
+                mmap_mode="r"
+            )
+
+            if self.cache:
+                self._cache[index] = out
+
         if self.transform is not None:
             out = self.transform(out)
-
-        if self.cache:
-            self._cache[index] = out
-
         return out
 
 
@@ -507,6 +508,8 @@ def compute_mask_intersections(
     position_data, mask, mask_name, mask_physical_shape, threshold
 ):
     "position_data is a dictionary with keys 'position'"
+    import copy 
+    position_data = copy.deepcopy(position_data)
 
     for position_datum in position_data:
         xmin, ymin, xmax, ymax = position_datum["position"]
@@ -525,6 +528,8 @@ def compute_mask_intersections(
 
 
 def select_patch(image, position_dict, patch_options):
+    position_dict = position_dict.copy()
+
     xmin_mm, ymin_mm, xmax_mm, ymax_mm = position_dict.pop("position")
 
     # we shift the patch by a random amount
@@ -601,6 +606,7 @@ class _ExactNCTPatchesDataset(Dataset):
     def __getitem__(self, index):
         i, j = self._indices[index]
         item = self.dataset[i]
+
         image = item.pop(self.item_name_for_patches)
         if self.prescale_image:
             image = (image - image.min()) / (image.max() - image.min())
