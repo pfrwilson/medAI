@@ -251,7 +251,7 @@ class ExactNCT2013RFImages(ExactNCT2013Cores):
 
     def __getitem__(self, index):
         if self.cache and index in self._cache:
-            out = self._cache[index]
+            out = self._cache[index].copy()
 
         else: 
             core_info = super().__getitem__(index)
@@ -606,6 +606,7 @@ class _ExactNCTPatchesDataset(Dataset):
     def __getitem__(self, index):
         i, j = self._indices[index]
         item = self.dataset[i]
+        
         image = item.pop(self.item_name_for_patches)
         if self.prescale_image:
             image = (image - image.min()) / (image.max() - image.min())
