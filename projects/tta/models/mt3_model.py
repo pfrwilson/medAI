@@ -6,6 +6,8 @@ import timm
 from timm.layers import create_classifier 
 import learn2learn as l2l
 
+from typing import List
+
 @dataclass
 class FeatureExtractorConfig:
     model_name: str = 'resnet14t'
@@ -127,12 +129,11 @@ class YShapeModel(nn.Module):
         latent = self.global_pool(latent)
         latent = F.relu(self.pre_hidden(latent)) 
         
-        proj = self.projector(latent)
-        if use_predictor:
-            proj = self.predictor(proj)
+        z_proj = self.projector(latent)
+        r_pred = self.predictor(z_proj)
             
         logits = self.classifier(latent)    
-        return latent, proj, logits
+        return latent, z_proj, r_pred, logits
             
         
 class MT3Model(nn.Module):
@@ -150,13 +151,14 @@ class MT3Model(nn.Module):
         self.y_shape_model = YShapeModel(mt3_config.y_shape_config)
         self.model = l2l.algorithms.MAML(self.y_shape_model, lr=self.inner_lr, first_order=False)
         
-    def forward(self, batch_images_aug_1, batch_images_aug_2, images, labels, training=False):  
+    def forward(self, batch_images_aug_1, batch_images_aug_2, batch_images, batch_labels, training=False):  
         meta_batch_size = batch_images_aug_1.shape[0]
         num_support_imgs = batch_images_aug_1.shape[1]
         
         ce_loss_sum = 0
         byol_loss_sum = 0
         total_loss_sum = 0    
+        batch_logits = []
         for batch_idx in range(meta_batch_size):
             # Clone y_shape_model to get a new model for each batch in meta batch
             spec_model = self.model.clone()
@@ -164,16 +166,19 @@ class MT3Model(nn.Module):
             # Get task augmented images
             task_imgs_aug1 = batch_images_aug_1[batch_idx][:, None, ...]
             task_imgs_aug2 = batch_images_aug_2[batch_idx][:, None, ...]
+            images = batch_images[batch_idx][None, ...]
+            labels = batch_labels[batch_idx][None,...]
             
             # Run the inner training loop
             with torch.enable_grad(): # enable gradient for the inner loop
                 spec_model, byol_loss = self.inner_train_loop(task_imgs_aug1, task_imgs_aug2, spec_model)
             
             # Get the predictions 
-            _, _, logits = spec_model(images, training=training)
+            _, _, _, logits = spec_model(images, training=training)
+            batch_logits.append(logits.detach().cpu())
             
             # Get the cross entropy loss
-            ce_loss = F.cross_entropy(logits[batch_idx], labels[batch_idx])
+            ce_loss = F.cross_entropy(logits, labels)
             
             # Get the totall loss
             total_loss = ce_loss + self.beta_byol * byol_loss
@@ -193,15 +198,19 @@ class MT3Model(nn.Module):
         ce_loss_avg = ce_loss_sum/meta_batch_size
         byol_loss_avg = byol_loss_sum/meta_batch_size
         
-        return logits, total_loss_avg, ce_loss_avg, byol_loss_avg
+        # Concatenate the logits with shape [1, 2] each
+        batch_logits = torch.cat(batch_logits, dim=0)
+        
+        return batch_logits, total_loss_avg, ce_loss_avg, byol_loss_avg
         
     def inner_train_loop(self, images_aug_1, images_aug_2, spec_model: l2l.algorithms.MAML):
         for i in range(self.inner_steps + 1):              
-            _, r1, _ = spec_model(images_aug_1, use_predictor=True, training=True)
-            _, r2, _ = spec_model(images_aug_2, use_predictor=True, training=True)
-        
-            _, z1, _ = spec_model(images_aug_1, use_predictor=False, training=True)
-            _, z2, _ = spec_model(images_aug_2, use_predictor=False, training=True)
+            _, z1, r1, logits1 = spec_model(images_aug_1, training=True)
+            _, z2, r2, logits2 = spec_model(images_aug_2, training=True)
+
+            # with torch.no_grad():
+            # _, z1, _ = spec_model(images_aug_1, use_predictor=False, training=True)
+            # _, z2, _ = spec_model(images_aug_2, use_predictor=False, training=True)
         
             # Calculate the loss
             loss1 = self.byol_loss_fn(r1, z2.detach())
@@ -220,4 +229,138 @@ class MT3Model(nn.Module):
         z = F.normalize(z, dim=1)
         return 2 - 2 * (r * z).sum(dim=-1)
         
+     
         
+class ParallelMT3Config(MT3Config):
+    pass
+
+class ParallelMT3Model(MT3Model):
+    config_class = ParallelMT3Config
+    config: ParallelMT3Config
+    
+    def __init__(self, mt3_config: ParallelMT3Config) -> None:
+        super().__init__(mt3_config)
+        self.model = None
+        
+        self.feature_extractor = self.y_shape_model.feature_extractor
+        self.pre_hidden = self.y_shape_model.pre_hidden
+        self.classifier = self.y_shape_model.classifier
+        self.pre_hidden_ANIL = l2l.algorithms.MAML(self.pre_hidden, lr=self.inner_lr, first_order=False)
+    
+    def forward(self, batch_images_aug_1, batch_images_aug_2, batch_images, batch_labels, training=False):  
+        meta_batch_size = batch_images_aug_1.shape[0]
+        num_support_imgs = batch_images_aug_1.shape[1]
+        image_size = batch_images_aug_1.shape[-2:]
+        
+        # Concatenate the images in one big batch
+        big_batch_images = torch.cat([
+            batch_images_aug_1.reshape(-1, *image_size),
+            batch_images_aug_2(-1, *image_size),
+            batch_images
+            ], dim=0)
+        
+        # Get the features of the big batch
+        big_features = self.feature_extractor(big_batch_images[:, None, ...])[-1]
+        big_features = F.relu(self.y_shape_model.last_bn(big_features))
+        big_features = self.y_shape_model.global_pool(big_features)
+        
+        # Split the features back
+        batch_features_aug_1 = big_features[
+            :num_support_imgs*meta_batch_size
+            ].reshape(meta_batch_size, num_support_imgs, -1)
+        batch_features_aug_2 = big_features[
+            num_support_imgs*meta_batch_size:2*num_support_imgs*meta_batch_size
+            ].reshape(meta_batch_size, num_support_imgs, -1)
+        batch_features = big_features[2*num_support_imgs*meta_batch_size:]
+           
+        
+        # List of all specialized pre_hidden models
+        spec_pre_hiddens = []
+              
+        # Append specialized pre_hidden models and latents to the lists
+        for batch_idx in range(meta_batch_size):
+            # Clone pre_hidden to get a new model for each batch in meta batch
+            spec_pre_hidden = self.pre_hidden_ANIL.clone()
+            spec_pre_hiddens.append(spec_pre_hidden)
+        
+        spec_pre_hiddens, batch_byol_loss = self.inner_train_loop(
+            batch_features_aug_1, 
+            batch_features_aug_2, 
+            spec_pre_hiddens, 
+            training=training
+            )            
+
+        # Get the predictions and cross entropy loss
+        batch_logits = self.classifier(batch_features)
+        batch_ce_loss = F.cross_entropy(batch_logits, batch_labels)
+        
+        # Get the totall loss
+        total_loss = batch_ce_loss + self.beta_byol * batch_byol_loss
+        
+        total_loss_avg = total_loss.mean()/meta_batch_size
+        ce_loss_avg = batch_ce_loss.mean()/meta_batch_size
+        byol_loss_avg = batch_byol_loss.mean()/meta_batch_size
+        
+        # Backpropagate the total loss
+        if training:
+            # retain_graph=True to avoid RuntimeError. 
+            # Divide by meta_batch_size to get the average loss over the meta batch.
+            (total_loss_avg).backward(retain_graph=True) 
+        
+        return batch_logits.detach(), total_loss_avg.detach(), ce_loss_avg.detach(), byol_loss_avg.detach()
+        
+    def inner_train_loop(
+        self, 
+        batch_features_aug_1,
+        batch_features_aug_2, 
+        spec_pre_hiddens: List[l2l.algorithms.MAML], 
+        training=False
+        ):
+        
+        meta_batch_size = batch_features_aug_1.shape[0]
+        num_support_imgs = batch_features_aug_1.shape[1]
+        
+        for i in range(self.inner_steps + 1):
+            # List of latents after pre_hidden for each augmented image
+            batch_latents_aug_1 = []
+            batch_latents_aug_2 = []
+            
+            for batch_idx, spec_pre_hidden in enumerate(spec_pre_hiddens):
+                # Forward features through the pre_hidden
+                latents_aug_1 = spec_pre_hidden(batch_features_aug_1[batch_idx]) # shape [num_support_imgs, proj_hidden_size]
+                latents_aug_2 = spec_pre_hidden(batch_features_aug_2[batch_idx]) # shape [num_support_imgs, proj_hidden_size]
+                
+                # Append the latents to the list
+                batch_latents_aug_1.append(latents_aug_1)
+                batch_latents_aug_2.append(latents_aug_2)
+            
+            # Concatenate the latents
+            batch_latents_aug_1 = torch.cat(batch_latents_aug_1, dim=0)
+            batch_latents_aug_2 = torch.cat(batch_latents_aug_2, dim=0)
+            
+            batch_z_proj, batch_r_pred = self.y_shape_model.ssl_forward_with_latents(
+                torch.cat(
+                    [batch_latents_aug_1,
+                     batch_latents_aug_2],
+                    dim=0
+                    ),
+                training=training
+            )
+            
+            batch_z_proj1, batch_r_pred1 = batch_z_proj[:num_support_imgs*meta_batch_size], \
+                batch_r_pred[:num_support_imgs*meta_batch_size]
+            batch_z_proj2, batch_r_pred2 = batch_z_proj[num_support_imgs*meta_batch_size:], \
+                batch_r_pred[num_support_imgs*meta_batch_size:]
+                
+            batch_loss1 = self.byol_loss_fn(batch_r_pred1, batch_z_proj2.detach()).reshape(meta_batch_size, num_support_imgs)
+            batch_loss2 = self.byol_loss_fn(batch_r_pred2, batch_z_proj1.detach()).reshape(meta_batch_size, num_support_imgs)
+            batch_byol_loss = batch_loss1 + batch_loss2
+            
+            for batch_idx, spec_pre_hidden in enumerate(spec_pre_hiddens):
+                # Update the model
+                if i == self.inner_steps: # similar to mt3 original code (maybe useless)
+                    break
+                spec_pre_hidden.adapt(batch_byol_loss[batch_idx].mean(), allow_unused=True)
+            
+        return spec_pre_hiddens, batch_byol_loss.mean(dim=1)
+   

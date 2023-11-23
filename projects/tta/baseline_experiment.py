@@ -60,7 +60,7 @@ class BaselineConfig(BasicExperimentConfig):
     debug: bool = False
     use_wandb: bool = True
     
-    epochs: int = 100
+    epochs: int = 50
     batch_size: int = 32
     fold: int = 0
     
