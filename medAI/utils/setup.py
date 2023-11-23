@@ -280,9 +280,9 @@ class BasicExperiment:
             os.environ["WANDB_MODE"] = "disabled"
 
         wandb.init(
-            project=self.config.project
             entity=self.config.entity,
-            if not self.config.debug
+            project=self.config.project
+            if not self.config.debug  
             else f"{self.config.project}-debug",
             group=self.config.group,
             config=asdict(self.config),

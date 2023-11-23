@@ -21,7 +21,7 @@ from utils.metrics import MetricCalculator
 from timm.optim.optim_factory import create_optimizer
 
 from einops import rearrange, repeat
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import timm
 
@@ -52,11 +52,11 @@ class OptimizerConfig:
 class BaselineConfig(BasicExperimentConfig):
     """Configuration for the experiment."""
     # exp_dir: str = "./projects/tta/logs/first_experiment_test" 
-    name: str = "group_norm"
+    name: str = "baseline_group_norm"
     group: str = None
     project: str = "tta"
     entity: str = "mahdigilany"
-    resume: bool = False
+    resume: bool = True
     debug: bool = False
     use_wandb: bool = True
     
@@ -74,8 +74,6 @@ class BaselineConfig(BasicExperimentConfig):
     optimizer_config: OptimizerConfig = OptimizerConfig()
     
         
-
-
 class BaselineExperiment(BasicExperiment): 
     config_class = BaselineConfig
     config: BaselineConfig
@@ -300,7 +298,6 @@ class BaselineExperiment(BasicExperiment):
             # Log metrics every epoch
             self.log_metrics(desc)
 
-            
     def log_losses(self, batch_loss_avg, desc):
         wandb.log(
             {f"{desc}/loss": batch_loss_avg, "epoch": self.epoch},

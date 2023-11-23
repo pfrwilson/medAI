@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+import typing as tp
 import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -26,25 +27,33 @@ import matplotlib.pyplot as plt
 
 
 @dataclass
-class MT3Config(BaselineConfig):
+class MT3ExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    exp_dir: str = "./projects/tta/logs/first_experiment_test" 
-    resume: bool = False
-    debug: bool = True
-    use_wandb: bool = False
+    name: str = "mt3_2sprt"
+    group: str = None
+    project: str = "tta"
+    entity: str = "mahdigilany"
+    resume: bool = True
+    debug: bool = False
+    use_wandb: bool = True
     
-    epochs: int = 10 
-    batch_size: int = 8
+    epochs: int = 50
+    batch_size: int = 32
     fold: int = 0
+    
     min_invovlement: int = 40
-    num_support_patches: int = 10
-    model_config: MT3Config = MT3Config()
+    needle_mask_threshold: float = 0.5
+    prostate_mask_threshold: float = 0.5
+    patch_size_mm: tp.Tuple[float, float] = (5, 5)
+    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    num_support_patches: int = 2
+    model_config: MT3Config = MT3Config(inner_steps=1, inner_lr=0.01, beta_byol=0.1)
     optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
 class MT3Experiment(BaselineExperiment): 
-    config_class = MT3Config
-    config: MT3Config
+    config_class = MT3ExperimentConfig
+    config: MT3ExperimentConfig
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -61,7 +70,7 @@ class MT3Experiment(BaselineExperiment):
                 patch = item.pop("patch")
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
-                patch = T.ToTensor()(patch)
+                # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
 
                 support_patches = item.pop("support_patches")
@@ -70,7 +79,7 @@ class MT3Experiment(BaselineExperiment):
                 / (support_patches.max(axis=(1,2), keepdims=True) \
                     - support_patches.min(axis=(1, 2), keepdims=True))
                 support_patches = TVImage(support_patches)
-                support_patches = T.ToTensor()(support_patches)
+                # support_patches = T.ToTensor()(support_patches)
                 support_patches = T.Resize(selfT.size, antialias=True)(support_patches).float()
                 
                 # Augment support patches
@@ -88,7 +97,7 @@ class MT3Experiment(BaselineExperiment):
                 return support_patches_aug1, support_patches_aug2, patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig
+        from datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig, PatchOptions
         train_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="train",
             transform=Transform(augment=False),
@@ -97,6 +106,11 @@ class MT3Experiment(BaselineExperiment):
                 min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
+            ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
                 num_support_patches=self.config.num_support_patches
@@ -108,9 +122,14 @@ class MT3Experiment(BaselineExperiment):
             split="val",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
+            ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
                 num_support_patches=self.config.num_support_patches
@@ -122,9 +141,14 @@ class MT3Experiment(BaselineExperiment):
             split="test",
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
                 fold=self.config.fold
+            ),
+            patch_options=PatchOptions(
+                patch_size_mm=self.config.patch_size_mm,
+                needle_mask_threshold=self.config.needle_mask_threshold,
+                prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
                 num_support_patches=self.config.num_support_patches
@@ -154,56 +178,57 @@ class MT3Experiment(BaselineExperiment):
         return model
     
     def run_epoch(self, loader, train=True, desc="train"):
-        with torch.no_grad() if not train else torch.enable_grad():
-            self.model.train() if train else self.model.eval()
+        # with torch.no_grad() if not train else torch.enable_grad():
+        self.model.train() if train else self.model.eval()
+        
+        
+        for i, batch in enumerate(tqdm(loader, desc=desc)):
+            images_aug_1, images_aug_2, images, labels, meta_data = batch
+            images_aug_1 = images_aug_1.cuda()
+            images_aug_2 = images_aug_2.cuda()
+            images = images.cuda()
+            labels = labels.cuda()
             
+            # Zero gradients
+            if train:
+                self.optimizer.zero_grad()
             
-            for i, batch in enumerate(tqdm(loader, desc=desc)):
-                images_aug_1, images_aug_2, images, labels, meta_data = batch
-                images_aug_1 = images_aug_1.cuda()
-                images_aug_2 = images_aug_2.cuda()
-                images = images.cuda()
-                labels = labels.cuda()
-                
-                # Zero gradients
-                if train:
-                    self.optimizer.zero_grad()
-                
-                (logits, 
-                total_loss_avg,
-                ce_loss_avg,
-                byol_loss_avg
-                ) = self.model(images_aug_1, images_aug_2, images, labels, training=train)
+            (logits, 
+            total_loss_avg,
+            ce_loss_avg,
+            byol_loss_avg
+            ) = self.model(images_aug_1, images_aug_2, images, labels, training=train)
 
-                # Optimizer step
-                if train:
-                    # Loss already backwarded in the model
-                    self.optimizer.step()
-                    self.scheduler.step()
-                    wandb.log({"lr": self.scheduler.get_lr()[0]})
-                             
-                # Update metrics   
-                self.metric_calculator.update(
-                    batch_meta_data = meta_data,
-                    logits = logits.detach().cpu().numpy(),
-                    labels = labels.detach().cpu().numpy(),
-                )
-                
-                # Log losses
-                self.log_losses(total_loss_avg, ce_loss_avg, byol_loss_avg, desc)
-                
-                # Break if debug
-                if self.config.debug and i > 1:
-                    break
+            # Optimizer step
+            if train:
+                # Loss already backwarded in the model
+                self.optimizer.step()
+                self.scheduler.step()
+                wandb.log({"lr": self.scheduler.get_last_lr()[0]})
+                            
+            # Update metrics   
+            self.metric_calculator.update(
+                batch_meta_data = meta_data,
+                logits = logits.detach().cpu(),
+                labels = labels.detach().cpu(),
+            )
             
-            # Log metrics every epoch
-            self.log_metrics(desc)
+            # Log losses
+            self.log_losses(total_loss_avg, ce_loss_avg, byol_loss_avg, desc)
+            
+            # # Break if debug
+            # if self.config.debug and i > 0:
+            #     break
+        
+        # Log metrics every epoch
+        self.log_metrics(desc)
                 
     def log_losses(self, total_loss_avg, ce_loss_avg, byol_loss_avg, desc):
         wandb.log({
-            f"{desc}_loss": total_loss_avg,
-            f"{desc}_ce_loss": ce_loss_avg,
-            f"{desc}_byol_loss": byol_loss_avg,
+            f"{desc}/loss": total_loss_avg,
+            f"{desc}/ce_loss": ce_loss_avg,
+            f"{desc}/byol_loss": byol_loss_avg,
+            "epoch": self.epoch,
             })
 
 

@@ -336,13 +336,13 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
         self.split = split
         self.support_patch_config = support_patch_config
         self.dataset = ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
-            split, transform=None, cohort_selection_options=cohort_selection_options
+            split, transform=None, cohort_selection_options=cohort_selection_options, cache=True
         )
 
         self.base_positions = list(compute_base_positions(
             (28, 46.06), patch_options
         )) 
-        _needle_mask = resize(self.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False)
+        _needle_mask = resize(self.dataset.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False)
         
         self.support_positions = []
         self.query_positions = [] 
@@ -362,7 +362,7 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
             self.support_positions.append(support_possitions)
             self.query_positions.append(query_positions)
             
-            if debug and i > 10:
+            if debug and i > 20:
                 break 
             
         self._indices = []
@@ -370,7 +370,7 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
             for j in range(len(self.query_positions[i])):
                 self._indices.append((i, j))
             
-            if debug and i > 10:
+            if debug and i > 20:
                 break
                 
     def compute_masks_intersections_update_positions(

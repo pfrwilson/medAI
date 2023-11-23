@@ -166,7 +166,8 @@ class MT3Model(nn.Module):
             task_imgs_aug2 = batch_images_aug_2[batch_idx][:, None, ...]
             
             # Run the inner training loop
-            spec_model, byol_loss = self.inner_train_loop(task_imgs_aug1, task_imgs_aug2, spec_model)
+            with torch.enable_grad(): # enable gradient for the inner loop
+                spec_model, byol_loss = self.inner_train_loop(task_imgs_aug1, task_imgs_aug2, spec_model)
             
             # Get the predictions 
             _, _, logits = spec_model(images, training=training)
@@ -195,15 +196,13 @@ class MT3Model(nn.Module):
         return logits, total_loss_avg, ce_loss_avg, byol_loss_avg
         
     def inner_train_loop(self, images_aug_1, images_aug_2, spec_model: l2l.algorithms.MAML):
-        for i in range(self.inner_steps + 1):
-            with torch.enable_grad(): # enable gradient for the inner loop during inference as well
-                _, r1, _ = spec_model(images_aug_1, use_predictor=True, training=True)
-                _, r2, _ = spec_model(images_aug_2, use_predictor=True, training=True)
-            
-            with torch.no_grad(): # disable gradient for the inner loop in all time
-                _, z1, _ = spec_model(images_aug_1, use_predictor=False, training=True)
-                _, z2, _ = spec_model(images_aug_2, use_predictor=False, training=True)
-            
+        for i in range(self.inner_steps + 1):              
+            _, r1, _ = spec_model(images_aug_1, use_predictor=True, training=True)
+            _, r2, _ = spec_model(images_aug_2, use_predictor=True, training=True)
+        
+            _, z1, _ = spec_model(images_aug_1, use_predictor=False, training=True)
+            _, z2, _ = spec_model(images_aug_2, use_predictor=False, training=True)
+        
             # Calculate the loss
             loss1 = self.byol_loss_fn(r1, z2.detach())
             loss2 = self.byol_loss_fn(r2, z1.detach())
