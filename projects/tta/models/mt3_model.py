@@ -119,7 +119,13 @@ class YShapeModel(nn.Module):
             nn.Linear(config.proj_hidden_size, config.feature_extractor.num_classes),
             nn.Softmax(dim=-1)
             )
-            
+    
+    def ssl_forward_with_latents(self, latents, training=False):
+        z_proj = self.projector(latents)
+        r_pred = self.predictor(z_proj)
+        
+        return z_proj, r_pred
+    
     def forward(self, x, training=False, use_predictor=False): #TODO: I guess train() is useless here
         self.feature_extractor.train() if training else self.feature_extractor.eval()
         self.classifier.train() if training else self.classifier.eval()
@@ -231,14 +237,11 @@ class MT3Model(nn.Module):
         
      
         
-class ParallelMT3Config(MT3Config):
-    pass
-
-class ParallelMT3Model(MT3Model):
-    config_class = ParallelMT3Config
-    config: ParallelMT3Config
+class MT3ANILModel(MT3Model):
+    config_class = MT3Config
+    config: MT3Config
     
-    def __init__(self, mt3_config: ParallelMT3Config) -> None:
+    def __init__(self, mt3_config: MT3Config) -> None:
         super().__init__(mt3_config)
         self.model = None
         
@@ -255,8 +258,8 @@ class ParallelMT3Model(MT3Model):
         # Concatenate the images in one big batch
         big_batch_images = torch.cat([
             batch_images_aug_1.reshape(-1, *image_size),
-            batch_images_aug_2(-1, *image_size),
-            batch_images
+            batch_images_aug_2.reshape(-1, *image_size),
+            batch_images[:, 0, ...]
             ], dim=0)
         
         # Get the features of the big batch
@@ -291,15 +294,16 @@ class ParallelMT3Model(MT3Model):
             )            
 
         # Get the predictions and cross entropy loss
-        batch_logits = self.classifier(batch_features)
+        batch_latents = self.pre_hidden_ANIL(batch_features)
+        batch_logits = self.classifier(batch_latents)
         batch_ce_loss = F.cross_entropy(batch_logits, batch_labels)
         
         # Get the totall loss
         total_loss = batch_ce_loss + self.beta_byol * batch_byol_loss
         
-        total_loss_avg = total_loss.mean()/meta_batch_size
-        ce_loss_avg = batch_ce_loss.mean()/meta_batch_size
-        byol_loss_avg = batch_byol_loss.mean()/meta_batch_size
+        total_loss_avg = total_loss.mean()
+        ce_loss_avg = batch_ce_loss.mean()
+        byol_loss_avg = batch_byol_loss.mean()
         
         # Backpropagate the total loss
         if training:

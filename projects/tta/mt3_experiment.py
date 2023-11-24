@@ -16,7 +16,7 @@ import wandb
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 from baseline_experiment import BaselineExperiment, BaselineConfig, OptimizerConfig
-from models.mt3_model import MT3Model, MT3Config
+from models.mt3_model import MT3Model, MT3ANILModel, MT3Config
 from utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
@@ -29,25 +29,30 @@ import matplotlib.pyplot as plt
 @dataclass
 class MT3ExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "mt3_2sprt_test"
+    name: str = "mt3_anil_2sprt"
     group: str = None
     project: str = "tta"
     entity: str = "mahdigilany"
     resume: bool = True
-    debug: bool = True
-    use_wandb: bool = False
+    debug: bool = False
+    use_wandb: bool = True
     
     epochs: int = 50
-    batch_size: int = 32
+    batch_size: int = 16
     fold: int = 0
-    
     min_invovlement: int = 40
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
-    num_support_patches: int = 5
-    model_config: MT3Config = MT3Config(inner_steps=1, inner_lr=0.01, beta_byol=0.1)
+    num_support_patches: int = 2
+    
+    mttt_anil: bool = True
+    model_config: MT3Config = MT3Config(
+        inner_steps=1, 
+        inner_lr=0.01,
+        beta_byol=0.1
+        )
     optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
@@ -174,7 +179,10 @@ class MT3Experiment(BaselineExperiment):
         }
         
     def setup_model(self):
-        model = MT3Model(self.config.model_config)
+        if not self.config.mttt_anil:
+            model = MT3Model(self.config.model_config)
+        else:
+            model = MT3ANILModel(self.config.model_config)
         return model
     
     def run_epoch(self, loader, train=True, desc="train"):
