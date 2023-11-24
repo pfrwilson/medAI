@@ -6,10 +6,10 @@ for FOLD in 0 1 2 3 4
 do 
 echo "FOLD: $FOLD"
 python medsam_cancer_detection_v2.py \
-    --cluster slurm \
+    --cluster submitit_auto \
     --timeout_min 480 \
     --use_augmentation \
-    --benign_cancer_ratio_for_training 2 \
+    --benign_cancer_ratio_for_training 3 \
     --fold $FOLD \
     --epochs 30 \
     --group "${GROUP_NAME}" \

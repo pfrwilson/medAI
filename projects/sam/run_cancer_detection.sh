@@ -1,13 +1,15 @@
 
 python medsam_cancer_detection_v2.py \
-    --cluster slurm \
+    --cluster submitit_auto \
+    --slurm_gres gpu:a40:1 \
     --timeout_min 480 \
     --use_augmentation \
-    --benign_cancer_ratio_for_training 2 \
+    --benign_cancer_ratio_for_training 3 \
     --fold 0 \
     --epochs 30 \
     --model_config MedSAMCancerDetectorV2 \
-    --needle_threshold -1 
+    --min_involvement_pct_training 0 \
+    --loss involvement_tolerant_loss \
+    --accumulate_grad_steps 1 \
+    --batch_size 8 
 
-
-#    --medsam_checkpoint /h/pwilson/projects/medAI/projects/sam/logs/finetune_medsam/2023-11-16-10:31:49-heavy-polecat/checkpoints/medsam-finetuned_image_encoder_aligned_files_0.9322000374454065.pth \
