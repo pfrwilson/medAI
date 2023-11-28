@@ -10,7 +10,7 @@ from typing import List
 
 @dataclass
 class FeatureExtractorConfig:
-    model_name: str = 'resnet14t'
+    model_name: str = 'resnet10t'
     num_classes: int = 2
     in_chans: int = 1
     features_only: bool = True # return features only, not logits
@@ -34,7 +34,7 @@ class YShapeConfig:
 class MT3Config:
     y_shape_config: YShapeConfig = YShapeConfig()
     inner_steps: int = 1
-    inner_lr: float = 0.01
+    inner_lr: float = 0.001
     beta_byol: float = 0.1 
 
 

@@ -16,7 +16,7 @@ import wandb
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 from baseline_experiment import BaselineExperiment, BaselineConfig, OptimizerConfig
-from models.mt3_model import MT3Model, MT3ANILModel, MT3Config
+from models.ttt_model import TTTModel, TTTConfig
 from utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
@@ -27,9 +27,9 @@ import matplotlib.pyplot as plt
 
 
 @dataclass
-class MT3ExperimentConfig(BaselineConfig):
+class TTTExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "mt3_anil_2sprt_32bz_res10_e-3innlr"
+    name: str = "ttt_2sprt_32bz_res10"
     group: str = None
     project: str = "tta"
     entity: str = "mahdigilany"
@@ -47,18 +47,13 @@ class MT3ExperimentConfig(BaselineConfig):
     benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
     num_support_patches: int = 2
     
-    mttt_anil: bool = True
-    model_config: MT3Config = MT3Config(
-        inner_steps=1, 
-        inner_lr=0.001,
-        beta_byol=0.1
-        )
+    model_config: TTTConfig = TTTConfig(adaptation_steps=1, beta_byol=0.1)
     optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
-class MT3Experiment(BaselineExperiment): 
-    config_class = MT3ExperimentConfig
-    config: MT3ExperimentConfig
+class TTTExperiment(BaselineExperiment): 
+    config_class = TTTExperimentConfig
+    config: TTTExperimentConfig
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -179,10 +174,7 @@ class MT3Experiment(BaselineExperiment):
         }
         
     def setup_model(self):
-        if not self.config.mttt_anil:
-            model = MT3Model(self.config.model_config)
-        else:
-            model = MT3ANILModel(self.config.model_config)
+        model = TTTModel(self.config.model_config)
         return model
     
     def run_epoch(self, loader, train=True, desc="train"):
@@ -243,4 +235,4 @@ class MT3Experiment(BaselineExperiment):
 
 
 if __name__ == '__main__': 
-    MT3Experiment.submit()
+    TTTExperiment.submit()

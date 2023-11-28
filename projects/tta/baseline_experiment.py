@@ -52,7 +52,7 @@ class OptimizerConfig:
 class BaselineConfig(BasicExperimentConfig):
     """Configuration for the experiment."""
     # exp_dir: str = "./projects/tta/logs/first_experiment_test" 
-    name: str = "baseline_group_norm"
+    name: str = "baseline_group_norm_res10"
     group: str = None
     project: str = "tta"
     entity: str = "mahdigilany"
