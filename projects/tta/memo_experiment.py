@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+from torch.func import vmap
 import typing as tp
 import numpy as np
 import torch.optim as optim
@@ -14,28 +15,32 @@ import logging
 import wandb
 
 import medAI
-from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
-from baseline_experiment import BaselineExperiment, BaselineConfig, OptimizerConfig
-from models.mt3_model import MT3Model, MT3ANILModel, MT3Config
+from baseline_experiment import BaselineExperiment, BaselineConfig, FeatureExtractorConfig
+
 from utils.metrics import MetricCalculator
 
 from timm.optim.optim_factory import create_optimizer
 
 from einops import rearrange, repeat
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
+import timm
+
+from copy import deepcopy
 
 
 @dataclass
-class MT3ExperimentConfig(BaselineConfig):
+class MEMOConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "mt3_anil_2sprt_32bz_res10_e-3innlr_test"
+    name: str = "memo_grp-norm_res10_crctd"
     resume: bool = True
-    debug: bool = True
-    use_wandb: bool = False
+    debug: bool = False
+    use_wandb: bool = True
     
     epochs: int = 50
-    batch_size: int = 8
+    batch_size: int = 32
+    batch_size_test: int = 32
+    shffl_test: bool = False
     fold: int = 0
     
     min_invovlement: int = 40
@@ -43,19 +48,25 @@ class MT3ExperimentConfig(BaselineConfig):
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
-    num_support_patches: int = 2
     
-    mttt_anil: bool = False
-    model_config: MT3Config = MT3Config(
-        inner_steps=1, 
-        inner_lr=0.001,
-        beta_byol=0.1
-        )
+    adaptation_steps: int = 1
+    model_config: FeatureExtractorConfig = FeatureExtractorConfig()
+    
 
 
-class MT3Experiment(BaselineExperiment): 
-    config_class = MT3ExperimentConfig
-    config: MT3ExperimentConfig
+def marginal_entropy(outputs):
+    '''Copied from https://github.com/zhangmarvin/memo/blob/main/cifar-10-exps/test_calls/test_adapt.py'''
+    logits = outputs - outputs.logsumexp(dim=-1, keepdim=True)
+    avg_logits = logits.logsumexp(dim=0) - np.log(logits.shape[0])
+    min_real = torch.finfo(avg_logits.dtype).min
+    avg_logits = torch.clamp(avg_logits, min=min_real)
+    return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1), avg_logits
+
+batched_marginal_entropy = vmap(marginal_entropy)
+
+class MEMOExperiment(BaselineExperiment): 
+    config_class = MEMOConfig
+    config: MEMOConfig
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -67,40 +78,33 @@ class MT3Experiment(BaselineExperiment):
             def __init__(selfT, augment=False):
                 selfT.augment = augment
                 selfT.size = (256, 256)
+                # Augmentation
+                selfT.transform = T.Compose([
+                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                    T.RandomHorizontalFlip(p=0.5),
+                    T.RandomVerticalFlip(p=0.5),
+                ])  
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
                 patch = (patch - patch.min()) / (patch.max() - patch.min())
                 patch = TVImage(patch)
+                # patch = T.ToImage()(patch)
                 # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
-
-                support_patches = item.pop("support_patches")
-                # Normalize support patches along last two dimensions
-                support_patches = (support_patches - support_patches.min(axis=(1, 2), keepdims=True)) \
-                / (support_patches.max(axis=(1,2), keepdims=True) \
-                    - support_patches.min(axis=(1, 2), keepdims=True))
-                support_patches = TVImage(support_patches)
-                # support_patches = T.ToTensor()(support_patches)
-                support_patches = T.Resize(selfT.size, antialias=True)(support_patches).float()
-                
-                # Augment support patches
-                transform = T.Compose([
-                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-                    T.RandomHorizontalFlip(p=0.5),
-                    T.RandomVerticalFlip(p=0.5),
-                ])   
-                support_patches_aug1, support_patches_aug2 = transform(support_patches, support_patches)
-                
-                if selfT.augment:
-                    patch = transform(patch)
                 
                 label = torch.tensor(item["grade"] != "Benign").long()
-                return support_patches_aug1, support_patches_aug2, patch, label, item
+                
+                if selfT.augment:
+                    patch_augs = torch.stack([selfT.transform(patch) for _ in range(5)], dim=0)
+                    return patch_augs, patch, label, item
+                
+                return -1, patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig, PatchOptions
-        train_ds = ExactNCT2013RFPatchesWithSupportPatches(
+        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions, PatchOptions
+        
+        train_ds = ExactNCT2013RFImagePatches(
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
@@ -114,15 +118,12 @@ class MT3Experiment(BaselineExperiment):
                 needle_mask_threshold=self.config.needle_mask_threshold,
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
-            support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
-            ),
             debug=self.config.debug,
         )
         
-        val_ds = ExactNCT2013RFPatchesWithSupportPatches(
+        val_ds = ExactNCT2013RFImagePatches(
             split="val",
-            transform=Transform(),
+            transform=Transform(augment=True),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
@@ -132,16 +133,13 @@ class MT3Experiment(BaselineExperiment):
                 patch_size_mm=self.config.patch_size_mm,
                 needle_mask_threshold=self.config.needle_mask_threshold,
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
-            support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
             ),
             debug=self.config.debug,
         )
                 
-        test_ds = ExactNCT2013RFPatchesWithSupportPatches(
+        test_ds = ExactNCT2013RFImagePatches(
             split="test",
-            transform=Transform(),
+            transform=Transform(augment=True),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
                 min_involvement=self.config.min_invovlement,
@@ -151,9 +149,6 @@ class MT3Experiment(BaselineExperiment):
                 patch_size_mm=self.config.patch_size_mm,
                 needle_mask_threshold=self.config.needle_mask_threshold,
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
-            support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
             ),
             debug=self.config.debug,
         )
@@ -163,50 +158,57 @@ class MT3Experiment(BaselineExperiment):
             train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
         )
         self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            val_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
         self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            test_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
-
 
         self.test_loaders = {
             "val": self.val_loader,
             "test": self.test_loader
         }
-        
-    def setup_model(self):
-        if not self.config.mttt_anil:
-            model = MT3Model(self.config.model_config)
-        else:
-            model = MT3ANILModel(self.config.model_config)
-        return model
-    
+
     def run_epoch(self, loader, train=True, desc="train"):
-        # with torch.no_grad() if not train else torch.enable_grad():
         self.model.train() if train else self.model.eval()
         
+        criterion = nn.CrossEntropyLoss()
         
         for i, batch in enumerate(tqdm(loader, desc=desc)):
-            images_aug_1, images_aug_2, images, labels, meta_data = batch
-            images_aug_1 = images_aug_1.cuda()
-            images_aug_2 = images_aug_2.cuda()
+            images_augs, images, labels, meta_data = batch
             images = images.cuda()
             labels = labels.cuda()
             
-            # Zero gradients
-            if train:
-                self.optimizer.zero_grad()
-            
-            (logits, 
-            total_loss_avg,
-            ce_loss_avg,
-            byol_loss_avg
-            ) = self.model(images_aug_1, images_aug_2, images, labels, training=train)
 
-            # Optimizer step
-            if train:
-                # Loss already backwarded in the model
+            if not train:
+                batch_size, aug_size= images_augs.shape[0], images_augs.shape[1]
+
+                # Adapt to test
+                _images_augs = images_augs.reshape(-1, *images_augs.shape[2:]).cuda()
+                model = deepcopy(self.model)
+                model.eval()
+                optimizer = optim.SGD(model.parameters(), lr=1e-4)
+                
+                for j in range(self.config.adaptation_steps):
+                    optimizer.zero_grad()
+                    outputs = model(_images_augs).reshape(batch_size, aug_size, -1)  
+                    loss, logits = batched_marginal_entropy(outputs)
+                    loss.mean().backward()
+                    optimizer.step()
+                
+                # Evaluate
+                logits = self.model(images)
+                loss = criterion(logits, labels)
+            else:
+                self.model.train()
+                
+                # Zero gradients
+                self.optimizer.zero_grad()
+                
+                # Forward
+                logits = self.model(images)
+                loss = criterion(logits, labels)
+                loss.backward()                
                 self.optimizer.step()
                 self.scheduler.step()
                 wandb.log({"lr": self.scheduler.get_last_lr()[0]})
@@ -219,25 +221,22 @@ class MT3Experiment(BaselineExperiment):
             )
             
             # Log losses
-            self.log_losses(total_loss_avg, ce_loss_avg, byol_loss_avg, desc)
+            self.log_losses(loss, desc)
             
-            # # Break if debug
-            # if self.config.debug and i > 0:
-            #     break
+            # Break if debug
+            if self.config.debug and i > 1:
+                break
         
         # Log metrics every epoch
         self.log_metrics(desc)
-                
-    def log_losses(self, total_loss_avg, ce_loss_avg, byol_loss_avg, desc):
-        wandb.log({
-            f"{desc}/loss": total_loss_avg,
-            f"{desc}/ce_loss": ce_loss_avg,
-            f"{desc}/byol_loss": byol_loss_avg,
-            "epoch": self.epoch,
-            },
+
+    def log_losses(self, batch_loss_avg, desc):
+        wandb.log(
+            {f"{desc}/loss": batch_loss_avg, "epoch": self.epoch},
             commit=False
             )
 
+    
 
 if __name__ == '__main__': 
-    MT3Experiment.submit()
+    MEMOExperiment.submit()

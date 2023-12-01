@@ -317,6 +317,7 @@ class BasicExperiment:
         args = parser.parse_args()
         if args.config_path is not None:
             cfg = cls.config_class.load_yaml(args.config_path)
+            logging.info(f"Loaded config from {args.config_path}")
         else:
             cfg = args.config
 

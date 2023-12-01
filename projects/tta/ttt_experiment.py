@@ -29,26 +29,27 @@ import matplotlib.pyplot as plt
 @dataclass
 class TTTExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "ttt_2sprt_32bz_res10"
-    group: str = None
-    project: str = "tta"
-    entity: str = "mahdigilany"
+    name: str = "ttt_2sprt_32bz_res10_shffl-tst_corctd"
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True
     
     epochs: int = 50
     batch_size: int = 32
+    batch_size_test: int = 32
+    shffl_test: bool = True
     fold: int = 0
+    
     min_invovlement: int = 40
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    
     num_support_patches: int = 2
+    include_query_patch: bool = False
     
     model_config: TTTConfig = TTTConfig(adaptation_steps=1, beta_byol=0.1)
-    optimizer_config: OptimizerConfig = OptimizerConfig()
 
 
 class TTTExperiment(BaselineExperiment): 
@@ -113,7 +114,8 @@ class TTTExperiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )
@@ -132,7 +134,8 @@ class TTTExperiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )
@@ -151,7 +154,8 @@ class TTTExperiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )
@@ -161,10 +165,10 @@ class TTTExperiment(BaselineExperiment):
             train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
         )
         self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            val_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
         self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            test_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
 
 

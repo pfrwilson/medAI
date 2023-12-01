@@ -125,7 +125,7 @@ class YShapeModel(nn.Module):
         
         return z_proj, r_pred
     
-    def forward(self, x, training=False, use_predictor=False): #TODO: I guess train() is useless here
+    def forward(self, x, training=False, use_predictor=False):
         self.feature_extractor.train() if training else self.feature_extractor.eval()
         self.classifier.train() if training else self.classifier.eval()
         
@@ -163,13 +163,15 @@ class TTTModel(nn.Module):
         big_batch_images = torch.cat([
             batch_images_aug_1.reshape(-1, *image_size),
             batch_images_aug_2.reshape(-1, *image_size),
-            batch_images[:, 0, ...]
+            batch_images[:, 0, ...],
             ], dim=0)
-        for i in range(self.adaptation_steps):
+        
+        adaptation_steps = 1 if training else self.adaptation_steps
+        for i in range(adaptation_steps):
             # Forward
             _, big_batch_z_proj, big_batch_r_pred, big_batch_logits = self.model(
                 big_batch_images[:, None, ...],
-                training=training
+                training=True, # always train group norm
                 )
             
             # Split the logits back
@@ -181,23 +183,32 @@ class TTTModel(nn.Module):
             z_proj_aug_2 = big_batch_z_proj[num_support_imgs*batch_size:2*num_support_imgs*batch_size]
             p_pred_aug_2 = big_batch_r_pred[num_support_imgs*batch_size:2*num_support_imgs*batch_size]
             
+            
             # Get the byol loss
             byol_losses = self.byol_loss_fn(p_pred_aug_1, z_proj_aug_2.detach()) + \
                 self.byol_loss_fn(p_pred_aug_2, z_proj_aug_1.detach())
             batch_byol_loss = byol_losses.reshape(batch_size, num_support_imgs).mean(dim=1)
-            
+
+                
             
             # Get the totall loss
             batch_total_loss = self.beta_byol * batch_byol_loss
             
-            # For the last adaptation step, add the cross entropy loss
-            if i == self.adaptation_steps - 1:
+            # Add cross entropy loss if training
+            if training:
                 batch_ce_loss = F.cross_entropy(batch_logits, batch_labels, reduction='none')
-                if training:
-                    batch_total_loss += batch_ce_loss
-            
+                batch_total_loss += batch_ce_loss
+        
             # Backpropagate the total loss for both training and testing
-            batch_total_loss.mean().backward() 
+            (batch_total_loss/adaptation_steps).mean().backward() 
+        
+        if not training:
+            # Get test logits
+            _, _, _, batch_logits = self.model(
+                batch_images,
+                training=False, # always train group norm
+                )
+            batch_ce_loss = F.cross_entropy(batch_logits, batch_labels, reduction='none')
             
         # Sum the losses
         ce_loss = batch_ce_loss.mean().item()

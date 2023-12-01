@@ -316,6 +316,7 @@ class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
 @dataclass
 class SupportPatchConfig:
     num_support_patches: int = 10
+    include_query_patch: bool = False # whether to include the query patch in the support patches
     
     
 class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
@@ -431,7 +432,7 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
 
         item["label"] = item["grade"] != "Benign"
 
-        position = self.query_positions[i][j]
+        position = self.query_positions[i][j] # Core i and patch j
                
         image_patch, position = select_patch(image, position, self.patch_options)
 
@@ -448,6 +449,13 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
             support_patches.append(support_patch)
             min_axial = min(min_axial, support_patch.shape[0])
             min_lateral = min(min_lateral, support_patch.shape[1])
+            
+        
+        # Add query patch to support patches if needed
+        if self.support_patch_config.include_query_patch:
+            support_patches.append(image_patch)
+            min_axial = min(min_axial, image_patch.shape[0])
+            min_lateral = min(min_lateral, image_patch.shape[1])
         
         # Resize support patches to the same size and stack them
         support_patches = [support_patch[:min_axial, :min_lateral] for support_patch in support_patches]

@@ -54,7 +54,7 @@ class BaselineConfig(BasicExperimentConfig):
     # exp_dir: str = "./projects/tta/logs/first_experiment_test" 
     name: str = "baseline_group_norm_res10"
     group: str = None
-    project: str = "tta"
+    project: str = "tta" 
     entity: str = "mahdigilany"
     resume: bool = True
     debug: bool = False
@@ -97,6 +97,7 @@ class BaselineExperiment(BasicExperiment):
 
         if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
             state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
+            logging.info(f"Resuming from epoch {state['epoch']}")
         else:
             state = None
 
