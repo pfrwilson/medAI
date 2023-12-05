@@ -32,7 +32,7 @@ from copy import deepcopy
 @dataclass
 class MEMOConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "memo_grp-norm_res10_crctd"
+    name: str = "memo"
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True

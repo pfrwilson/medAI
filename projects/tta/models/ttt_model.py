@@ -7,6 +7,7 @@ from timm.layers import create_classifier
 import learn2learn as l2l
 
 from typing import List
+from copy import deepcopy
 
 @dataclass
 class FeatureExtractorConfig:
@@ -35,6 +36,7 @@ class TTTConfig:
     y_shape_config: YShapeConfig = YShapeConfig()
     adaptation_steps: int = 1
     beta_byol: float = 0.1 
+    joint_training: bool = False
 
 
 class PPModelMLP(nn.Module):
@@ -150,6 +152,7 @@ class TTTModel(nn.Module):
         # Set the config
         self.adaptation_steps = ttt_config.adaptation_steps
         self.beta_byol = ttt_config.beta_byol
+        self.joint_training = ttt_config.joint_training
         
         # Create YShapeModel as model
         self.model = YShapeModel(ttt_config.y_shape_config)
@@ -166,16 +169,18 @@ class TTTModel(nn.Module):
             batch_images[:, 0, ...],
             ], dim=0)
         
+        # Prepare test time training 
         adaptation_steps = 1 if training else self.adaptation_steps
+        model = self.model if training else deepcopy(self.model)
+        optimizer = None if training else torch.optim.SGD(model.parameters(), lr=1e-4)
+        
+        # Train or test time train
         for i in range(adaptation_steps):
             # Forward
-            _, big_batch_z_proj, big_batch_r_pred, big_batch_logits = self.model(
+            _, big_batch_z_proj, big_batch_r_pred, big_batch_logits = model(
                 big_batch_images[:, None, ...],
                 training=True, # always train group norm
                 )
-            
-            # Split the logits back
-            batch_logits = big_batch_logits[2*num_support_imgs*batch_size:]
             
             # Split the z_proj and r_pred back
             z_proj_aug_1 = big_batch_z_proj[:num_support_imgs*batch_size]
@@ -183,28 +188,33 @@ class TTTModel(nn.Module):
             z_proj_aug_2 = big_batch_z_proj[num_support_imgs*batch_size:2*num_support_imgs*batch_size]
             p_pred_aug_2 = big_batch_r_pred[num_support_imgs*batch_size:2*num_support_imgs*batch_size]
             
-            
             # Get the byol loss
             byol_losses = self.byol_loss_fn(p_pred_aug_1, z_proj_aug_2.detach()) + \
                 self.byol_loss_fn(p_pred_aug_2, z_proj_aug_1.detach())
             batch_byol_loss = byol_losses.reshape(batch_size, num_support_imgs).mean(dim=1)
-
                 
-            
             # Get the totall loss
             batch_total_loss = self.beta_byol * batch_byol_loss
             
             # Add cross entropy loss if training
             if training:
+                # Split the logits back
+                batch_logits = big_batch_logits[2*num_support_imgs*batch_size:]
+                # Get the cross entropy loss
                 batch_ce_loss = F.cross_entropy(batch_logits, batch_labels, reduction='none')
                 batch_total_loss += batch_ce_loss
+                # Backpropagate the total loss for both training and testing
+                batch_total_loss.mean().backward() 
+            else:
+                if not self.joint_training:
+                    optimizer.zero_grad()
+                    batch_total_loss.mean().backward()
+                    optimizer.step()
         
-            # Backpropagate the total loss for both training and testing
-            (batch_total_loss/adaptation_steps).mean().backward() 
         
         if not training:
             # Get test logits
-            _, _, _, batch_logits = self.model(
+            _, _, _, batch_logits = model(
                 batch_images,
                 training=False, # always train group norm
                 )

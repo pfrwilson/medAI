@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 @dataclass
 class TTTExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "ttt_2sprt_32bz_res10_shffl-tst_corctd"
+    name: str = "ttt_2sprt"
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True
@@ -37,7 +37,7 @@ class TTTExperimentConfig(BaselineConfig):
     epochs: int = 50
     batch_size: int = 32
     batch_size_test: int = 32
-    shffl_test: bool = True
+    shffl_test: bool = False
     fold: int = 0
     
     min_invovlement: int = 40
@@ -49,7 +49,11 @@ class TTTExperimentConfig(BaselineConfig):
     num_support_patches: int = 2
     include_query_patch: bool = False
     
-    model_config: TTTConfig = TTTConfig(adaptation_steps=1, beta_byol=0.1)
+    model_config: TTTConfig = TTTConfig(
+        adaptation_steps=1,
+        beta_byol=0.1,
+        joint_training=False,
+        )
 
 
 class TTTExperiment(BaselineExperiment): 

@@ -9,7 +9,7 @@ import typing as tp
 import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import wandb
 
@@ -25,6 +25,13 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import timm
 
+
+@dataclass 
+class FourierTransformConfig:
+    use_fourier_feats: bool = False
+    n_fourier_feats: int = 512
+    scales: tp.List[float] = field(default_factory=lambda: [0.01, 0.1, 1, 5, 10, 20, 50, 100])
+    include_original: bool = False
 
 @dataclass
 class FeatureExtractorConfig:
@@ -72,6 +79,7 @@ class BaselineConfig(BasicExperimentConfig):
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig = OptimizerConfig()
+    fourier_transform_config: FourierTransformConfig = FourierTransformConfig()
     
         
 class BaselineExperiment(BasicExperiment): 
@@ -84,6 +92,8 @@ class BaselineExperiment(BasicExperiment):
             print(f"Epoch {self.epoch}")
             self.run_epoch(self.train_loader, train=True, desc="train")
             for name, test_loader in self.test_loaders.items():
+                if name == "test": # Temporary
+                    break
                 self.run_epoch(self.test_loader, train=False, desc=name)
             
             if self.best_score_updated:
@@ -131,7 +141,7 @@ class BaselineExperiment(BasicExperiment):
         from torchvision.transforms import v2 as T
         # from torchvision.datapoints import Image as TVImage
         from torchvision.tv_tensors import Image as TVImage
-
+                
         class Transform:
             def __init__(selfT, augment=False):
                 selfT.augment = augment
@@ -144,6 +154,7 @@ class BaselineExperiment(BasicExperiment):
                 # patch = T.ToImage()(patch)
                 # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
+                
                 
                 if selfT.augment:
                     # Augment support patches
@@ -229,16 +240,40 @@ class BaselineExperiment(BasicExperiment):
         self.metric_calculator = MetricCalculator()
     
     def setup_model(self):
+        # Create fourier transform if enabled
+        if self.config.fourier_transform_config.use_fourier_feats:
+            from utils.fourier_features import GaussianFourierFeatureTransform
+            self.fourier_transform = GaussianFourierFeatureTransform(
+                n_fourier_feats=self.config.fourier_transform_config.n_fourier_feats,
+                scales=self.config.fourier_transform_config.scales,
+                include_original=self.config.fourier_transform_config.include_original,
+            )
+        else:
+            self.fourier_transform = None
+        
+        # Get number of input channels
+        input_channels = self.config.model_config.in_chans \
+            if not self.config.fourier_transform_config.use_fourier_feats \
+                else self.config.fourier_transform_config.n_fourier_feats \
+                        + 8*int(self.config.fourier_transform_config.include_original),
+        
         # Create the model
         model: nn.Module = timm.create_model(
             self.config.model_config.model_name,
             num_classes=self.config.model_config.num_classes,
-            in_chans=self.config.model_config.in_chans,
+            in_chans=input_channels[0],
             features_only=self.config.model_config.features_only,
             norm_layer=lambda channels: nn.GroupNorm(
                 num_groups=self.config.model_config.num_groups, num_channels=channels
                 )
             )
+        
+        if self.fourier_transform is not None:
+            model = nn.Sequential(
+                self.fourier_transform,
+                model,
+            )
+            
         return model
     
     def save_states(self):
