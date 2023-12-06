@@ -4,6 +4,13 @@ from typing import Dict, List, Tuple
 import torch
 import torchmetrics
 
+def accuracy(*args, **kwargs):
+    if "threshold" in kwargs:
+        threshold = kwargs["threshold"]
+        del kwargs["threshold"]
+    else:
+        threshold = 0.4
+    return torchmetrics.functional.accuracy(*args, **kwargs, threshold=threshold)
 
 class MetricCalculator(object):
     # list_of_metrics: List[str] = [
@@ -12,7 +19,7 @@ class MetricCalculator(object):
     # ]
     list_of_metrics: List = [
         torchmetrics.functional.auroc,
-        torchmetrics.functional.accuracy,
+        accuracy,
     ]
     
     def __init__(self, avg_core_logits_first: bool = False):
@@ -54,17 +61,12 @@ class MetricCalculator(object):
     def get_core_metrics(self):
         if self.avg_core_logits_first:
             logits = torch.cat(
-                [torch.stack(logits_list).mean(dim=0) for logits_list in self.core_id_logits.values()]
-                )          
-            predicted_labels = logits.argmax(dim=1)
+                [torch.stack(logits_list).mean(dim=0) for logits_list in self.core_id_logits.values()])          
         else:
             logits = torch.stack(
                 [torch.stack(logits_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
-                for logits_list in self.core_id_logits.values()]
-                )
-            # Convert logits to probabilities of being True and False
+                for logits_list in self.core_id_logits.values()])
             logits = torch.cat([(1 - logits).unsqueeze(1), logits.unsqueeze(1)], dim=1)
-            predicted_labels = logits >= 0.5
 
         labels = torch.stack(
             [labels_list[0] for labels_list in self.core_id_labels.values()]
