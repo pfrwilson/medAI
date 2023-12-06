@@ -44,7 +44,8 @@ class TTTExperimentConfig(BaselineConfig):
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_test: tp.Optional[float] = None
     
     num_support_patches: int = 2
     include_query_patch: bool = False
@@ -103,11 +104,12 @@ class TTTExperiment(BaselineExperiment):
 
 
         from datasets.datasets import ExactNCT2013RFPatchesWithSupportPatches, CohortSelectionOptions, SupportPatchConfig, PatchOptions
+        
         train_ds = ExactNCT2013RFPatchesWithSupportPatches(
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=1,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
                 min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
@@ -176,10 +178,10 @@ class TTTExperiment(BaselineExperiment):
         )
 
 
-        self.test_loaders = {
-            "val": self.val_loader,
-            "test": self.test_loader
-        }
+        # self.test_loaders = {
+        #     "val": self.val_loader,
+        #     "test": self.test_loader
+        # }
         
     def setup_model(self):
         model = TTTModel(self.config.model_config)

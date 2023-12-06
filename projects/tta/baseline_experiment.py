@@ -25,6 +25,8 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import timm
 
+from copy import copy
+
 
 @dataclass 
 class FourierTransformConfig:
@@ -40,6 +42,7 @@ class FeatureExtractorConfig:
     in_chans: int = 1
     features_only: bool = False # return features only, not logits
     num_groups: int = 8
+    use_batch_norm: bool = False
     
     def __post_init__(self):
         valid_models = timm.list_models()
@@ -134,7 +137,7 @@ class BaselineExperiment(BasicExperiment):
                      {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}""")
 
         self.epoch = 0 if state is None else state["epoch"]
-        self.best_score = 0 if state is None else state["best_score"]
+        self.best_test_score = 0 if state is None else state["best_score"]
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -263,10 +266,10 @@ class BaselineExperiment(BasicExperiment):
             num_classes=self.config.model_config.num_classes,
             in_chans=input_channels[0],
             features_only=self.config.model_config.features_only,
-            norm_layer=lambda channels: nn.GroupNorm(
-                num_groups=self.config.model_config.num_groups, num_channels=channels
-                )
-            )
+            norm_layer=nn.BatchNorm2d if self.config.model_config.use_batch_norm else\
+                lambda channels: nn.GroupNorm(
+                num_groups=self.config.model_config.num_groups, num_channels=channels)
+        )
         
         if self.fourier_transform is not None:
             model = nn.Sequential(
@@ -283,7 +286,7 @@ class BaselineExperiment(BasicExperiment):
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
-                "best_score": self.best_score,
+                "best_score": self.best_test_score,
             },
             os.path.join(
                 self.ckpt_dir,
@@ -348,16 +351,19 @@ class BaselineExperiment(BasicExperiment):
         
         # Update best score
         (
-            self.best_score_updated,
-            self.best_score
+            best_score_updated,
+            best_score
             ) = self.metric_calculator.update_best_score(metrics, desc)
+        
+        self.best_score_updated = copy(best_score_updated)
+        self.best_test_score = copy(best_score) if desc == "test" else self.best_test_score
         
         # Log metrics
         metrics_dict = {
             f"{desc}/{key}": value for key, value in metrics.items()
             }
         metrics_dict.update({"epoch": self.epoch})
-        metrics_dict.update({f"{desc}/best_core_auroc": self.best_score}) if desc == "val" else None 
+        metrics_dict.update({f"{desc}/best_core_auroc": best_score}) if desc != "train" else None 
         wandb.log(
             metrics_dict,
             commit=True

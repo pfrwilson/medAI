@@ -29,23 +29,24 @@ import matplotlib.pyplot as plt
 @dataclass
 class MT3ExperimentConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "mt3_anil_2sprt_32bz_res10_e-3innlr_test"
+    name: str = "mt3_anil_2sprt"
     resume: bool = True
-    debug: bool = True
-    use_wandb: bool = False
+    debug: bool = False
+    use_wandb: bool = True
     
     epochs: int = 50
-    batch_size: int = 8
+    batch_size: int = 32
     fold: int = 0
     
     min_invovlement: int = 40
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_test: tp.Optional[float] = None
     num_support_patches: int = 2
     
-    mttt_anil: bool = False
+    mttt_anil: bool = True
     model_config: MT3Config = MT3Config(
         inner_steps=1, 
         inner_lr=0.001,
@@ -104,7 +105,7 @@ class MT3Experiment(BaselineExperiment):
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=1,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
                 min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
@@ -170,10 +171,10 @@ class MT3Experiment(BaselineExperiment):
         )
 
 
-        self.test_loaders = {
-            "val": self.val_loader,
-            "test": self.test_loader
-        }
+        # self.test_loaders = {
+        #     "val": self.val_loader,
+        #     "test": self.test_loader
+        # }
         
     def setup_model(self):
         if not self.config.mttt_anil:

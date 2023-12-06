@@ -85,10 +85,9 @@ class MetricCalculator(object):
         return metrics
 
     def update_best_score(self, metrics, desc):
-        if desc == "train":
-            self.best_score_updated = False
+        self.best_score_updated = False
             
-        if desc == "val" and metrics["core_auroc"] > self.best_score:
+        if desc == "val" and metrics["core_auroc"] >= self.best_score:
                 self.best_score = metrics["core_auroc"]
                 self.best_score_updated = True
             

@@ -47,7 +47,8 @@ class MEMOConfig(BaselineConfig):
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_test: tp.Optional[float] = None
     
     adaptation_steps: int = 1
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
@@ -108,7 +109,7 @@ class MEMOExperiment(BaselineExperiment):
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=1,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
                 min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
@@ -164,10 +165,10 @@ class MEMOExperiment(BaselineExperiment):
             test_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
 
-        self.test_loaders = {
-            "val": self.val_loader,
-            "test": self.test_loader
-        }
+        # self.test_loaders = {
+        #     "val": self.val_loader,
+        #     "test": self.test_loader
+        # }
 
     def run_epoch(self, loader, train=True, desc="train"):
         self.model.train() if train else self.model.eval()
