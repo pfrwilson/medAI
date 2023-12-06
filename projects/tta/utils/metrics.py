@@ -49,7 +49,7 @@ class MetricCalculator(object):
         labels = torch.cat(
             [torch.tensor(labels_list) for labels_list in self.core_id_labels.values()]
             )
-        return self._get_metrics(logits, logits.argmax(dim=1), labels, prefix="patch_")
+        return self._get_metrics(logits, labels, prefix="patch_")
     
     def get_core_metrics(self):
         if self.avg_core_logits_first:
@@ -62,15 +62,16 @@ class MetricCalculator(object):
                 [torch.stack(logits_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
                 for logits_list in self.core_id_logits.values()]
                 )
+            # Convert logits to probabilities of being True and False
+            logits = torch.cat([(1 - logits).unsqueeze(1), logits.unsqueeze(1)], dim=1)
             predicted_labels = logits >= 0.5
 
         labels = torch.stack(
             [labels_list[0] for labels_list in self.core_id_labels.values()]
             )
+        return self._get_metrics(logits, labels, prefix="core_")
             
-        return self._get_metrics(logits, predicted_labels, labels, prefix="core_")
-    
-    def _get_metrics(self, logits, predicted_labels, labels, prefix=""):
+    def _get_metrics(self, logits, labels, prefix=""):
         metrics: Dict = {}
         for metric in self.list_of_metrics:
             metric_name: str = metric.__name__
@@ -92,4 +93,6 @@ class MetricCalculator(object):
         if desc == "test" and self.best_score_updated:
             self.best_score_test = metrics["core_auroc"]
         
-        return self.best_score_updated, self.best_score
+        best_score = self.best_score_test if desc == "test" else self.best_score
+        
+        return self.best_score_updated, best_score

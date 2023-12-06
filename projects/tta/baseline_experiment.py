@@ -75,7 +75,8 @@ class BaselineConfig(BasicExperimentConfig):
     needle_mask_threshold: float = 0.5
     prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_test: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    benign_to_cancer_ratio_test: tp.Optional[float] = None
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig = OptimizerConfig()
@@ -91,12 +92,11 @@ class BaselineExperiment(BasicExperiment):
         for self.epoch in range(self.epoch, self.config.epochs):
             print(f"Epoch {self.epoch}")
             self.run_epoch(self.train_loader, train=True, desc="train")
-            for name, test_loader in self.test_loaders.items():
-                if name == "test": # Temporary
-                    break
-                self.run_epoch(self.test_loader, train=False, desc=name)
+            self.run_epoch(self.val_loader, train=False, desc="val")
             
-            if self.best_score_updated:
+            # Run test and save states if best score updated
+            if self.best_score_updated and self.epoch > 7:
+                self.run_epoch(self.test_loader, train=False, desc="test")
                 self.save_states()
             
     def setup(self):
@@ -175,7 +175,7 @@ class BaselineExperiment(BasicExperiment):
             split="train",
             transform=Transform(augment=False),
             cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=1,
+                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
                 min_involvement=self.config.min_invovlement,
                 remove_benign_from_positive_patients=True,
                 fold=self.config.fold,
@@ -231,10 +231,10 @@ class BaselineExperiment(BasicExperiment):
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
 
-        self.test_loaders = {
-            "val": self.val_loader,
-            "test": self.test_loader
-        }
+        # self.test_loaders = {
+        #     "val": self.val_loader,
+        #     "test": self.test_loader
+        # }
         
     def setup_metrics(self):
         self.metric_calculator = MetricCalculator()
@@ -357,6 +357,7 @@ class BaselineExperiment(BasicExperiment):
             f"{desc}/{key}": value for key, value in metrics.items()
             }
         metrics_dict.update({"epoch": self.epoch})
+        metrics_dict.update({f"{desc}/best_core_auroc": self.best_score}) if desc == "val" else None 
         wandb.log(
             metrics_dict,
             commit=True
