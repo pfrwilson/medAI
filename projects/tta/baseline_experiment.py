@@ -100,44 +100,49 @@ class BaselineExperiment(BasicExperiment):
             # Run test and save states if best score updated
             if self.best_score_updated and self.epoch > 7:
                 self.run_epoch(self.test_loader, train=False, desc="test")
-                self.save_states()
+                self.save_states(best_model=True)
             
     def setup(self):
         # logging setup
         super().setup()
         self.setup_data()
-        self.setup_metrics()        
-
-        if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
-            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
-            logging.info(f"Resuming from epoch {state['epoch']}")
-        else:
-            state = None
+        self.setup_metrics()
 
         logging.info('Setting up model, optimizer, scheduler')
         self.model = self.setup_model()
         self.model = self.model.cuda()
         
         self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
-        # import torch.optim as optim
-        # self.optimizer = optim.Adam(self.model.parameters(), lr=1e-4)
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
         )
         
+        # Setup epoch and best score
+        self.epoch = 0 
+        self.best_val_score = 0 
+        
+        # Load checkpoint if exists
+        if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
+            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
+            logging.info(f"Resuming from epoch {state['epoch']}")
+        else:
+            state = None
+            
         if state is not None:
             self.model.load_state_dict(state["model"])
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
+            self.epoch = state["epoch"]
+            self.metric_calculator.load_best_score(state["best_score"])
+            self.best_val_score = state["best_score"]
+            self.save_states(save_model=False) # Free up model space
+            
 
         logging.info(f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
         logging.info(f"""Trainable parameters: 
                      {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}""")
-
-        self.epoch = 0 if state is None else state["epoch"]
-        self.best_test_score = 0 if state is None else state["best_score"]
 
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
@@ -279,20 +284,31 @@ class BaselineExperiment(BasicExperiment):
             
         return model
     
-    def save_states(self):
+    def save_states(self, best_model=False, save_model=False):
         torch.save(
-            {
-                "model": self.model.state_dict(),
+            {   
+                "model": self.model.state_dict() if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
-                "best_score": self.best_test_score,
+                "best_score": self.best_val_score,
             },
             os.path.join(
                 self.ckpt_dir,
                 "experiment.ckpt",
             )
         )
+        if best_model:
+            torch.save(
+                {   
+                    "model": self.model.state_dict(),
+                    "best_score": self.best_val_score,
+                },
+                os.path.join(
+                    self.ckpt_dir,
+                    "best_model.ckpt",
+                )
+            )
 
     def run_epoch(self, loader, train=True, desc="train"):
         with torch.no_grad() if not train else torch.enable_grad():
@@ -356,7 +372,7 @@ class BaselineExperiment(BasicExperiment):
             ) = self.metric_calculator.update_best_score(metrics, desc)
         
         self.best_score_updated = copy(best_score_updated)
-        self.best_test_score = copy(best_score) if desc == "test" else self.best_test_score
+        self.best_val_score = copy(best_score) if desc == "val" else self.best_val_score
         
         # Log metrics
         metrics_dict = {
@@ -370,7 +386,7 @@ class BaselineExperiment(BasicExperiment):
             )
     
     def checkpoint(self):
-        self.save_states()
+        self.save_states(save_model=True)
         return super().checkpoint()
 
 

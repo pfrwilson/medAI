@@ -22,9 +22,10 @@ class MetricCalculator(object):
         accuracy,
     ]
     
-    def __init__(self, avg_core_logits_first: bool = False):
+    def __init__(self, avg_core_logits_first: bool = False, best_score: float = 0.0):
         self.avg_core_logits_first = avg_core_logits_first
-        self.best_score = 0.0
+        self.best_score = best_score
+        self.best_score_test = 0.0
         self.best_score_updated = False
         self.reset()
 
@@ -97,3 +98,6 @@ class MetricCalculator(object):
         best_score = self.best_score_test if desc == "test" else self.best_score
         
         return self.best_score_updated, best_score
+    
+    def load_best_score(self, best_score):
+        self.best_score = best_score
