@@ -41,8 +41,6 @@ class TTTExperimentConfig(BaselineConfig):
     fold: int = 0
     
     min_invovlement: int = 40
-    needle_mask_threshold: float = 0.5
-    prostate_mask_threshold: float = 0.5
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None

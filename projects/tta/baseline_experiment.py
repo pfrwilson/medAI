@@ -75,8 +75,8 @@ class BaselineConfig(BasicExperimentConfig):
     fold: int = 0
     
     min_invovlement: int = 40
-    needle_mask_threshold: float = 0.5
-    prostate_mask_threshold: float = 0.5
+    needle_mask_threshold: float = 0.6
+    prostate_mask_threshold: float = 0.9
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
@@ -98,7 +98,7 @@ class BaselineExperiment(BasicExperiment):
             self.run_epoch(self.val_loader, train=False, desc="val")
             
             # Run test and save states if best score updated
-            if self.best_score_updated and self.epoch > 7:
+            if self.best_score_updated:
                 self.run_epoch(self.test_loader, train=False, desc="test")
                 self.save_states(best_model=True)
             
@@ -121,7 +121,7 @@ class BaselineExperiment(BasicExperiment):
         
         # Setup epoch and best score
         self.epoch = 0 
-        self.best_val_score = 0 
+        self.best_score = {"val": 0.0, "test": 0.0}
         
         # Load checkpoint if exists
         if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
@@ -135,8 +135,7 @@ class BaselineExperiment(BasicExperiment):
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
-            self.metric_calculator.load_best_score(state["best_score"])
-            self.best_val_score = state["best_score"]
+            self.metric_calculator.load_state_dict(state["best_score"])
             self.save_states(save_model=False) # Free up model space
             
 
@@ -265,15 +264,21 @@ class BaselineExperiment(BasicExperiment):
                 else self.config.fourier_transform_config.n_fourier_feats \
                         + 8*int(self.config.fourier_transform_config.include_original),
         
+        if self.config.model_config.use_batch_norm:
+            norm_layer = nn.BatchNorm2d
+        else:
+            norm_layer = lambda channels: nn.GroupNorm(
+                    num_groups=self.config.model_config.num_groups,
+                    num_channels=channels
+                    )
+        
         # Create the model
         model: nn.Module = timm.create_model(
             self.config.model_config.model_name,
             num_classes=self.config.model_config.num_classes,
             in_chans=input_channels[0],
             features_only=self.config.model_config.features_only,
-            norm_layer=nn.BatchNorm2d if self.config.model_config.use_batch_norm else\
-                lambda channels: nn.GroupNorm(
-                num_groups=self.config.model_config.num_groups, num_channels=channels)
+            norm_layer=norm_layer,
         )
         
         if self.fourier_transform is not None:
@@ -291,7 +296,7 @@ class BaselineExperiment(BasicExperiment):
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
-                "best_score": self.best_val_score,
+                "best_score": self.best_score,
             },
             os.path.join(
                 self.ckpt_dir,
@@ -302,7 +307,7 @@ class BaselineExperiment(BasicExperiment):
             torch.save(
                 {   
                     "model": self.model.state_dict(),
-                    "best_score": self.best_val_score,
+                    "best_score": self.best_score,
                 },
                 os.path.join(
                     self.ckpt_dir,
@@ -372,14 +377,17 @@ class BaselineExperiment(BasicExperiment):
             ) = self.metric_calculator.update_best_score(metrics, desc)
         
         self.best_score_updated = copy(best_score_updated)
-        self.best_val_score = copy(best_score) if desc == "val" else self.best_val_score
-        
+        self.best_score = copy(best_score)
+                
         # Log metrics
         metrics_dict = {
             f"{desc}/{key}": value for key, value in metrics.items()
             }
         metrics_dict.update({"epoch": self.epoch})
-        metrics_dict.update({f"{desc}/best_core_auroc": best_score}) if desc != "train" else None 
+        metrics_dict.update({
+            "val/best_core_auroc": best_score["val"],
+            "test/best_core_auroc": best_score["test"],
+            }) if desc == "val" else None 
         wandb.log(
             metrics_dict,
             commit=True

@@ -22,10 +22,10 @@ class MetricCalculator(object):
         accuracy,
     ]
     
-    def __init__(self, avg_core_logits_first: bool = False, best_score: float = 0.0):
+    def __init__(self, avg_core_logits_first: bool = False):
         self.avg_core_logits_first = avg_core_logits_first
-        self.best_score = best_score
-        self.best_score_test = 0.0
+        self.best_val_score = 0.0
+        self.best_test_score = 0.0
         self.best_score_updated = False
         self.reset()
 
@@ -88,16 +88,15 @@ class MetricCalculator(object):
     def update_best_score(self, metrics, desc):
         self.best_score_updated = False
             
-        if desc == "val" and metrics["core_auroc"] >= self.best_score:
-                self.best_score = metrics["core_auroc"]
+        if desc == "val" and metrics["core_auroc"] >= self.best_val_score:
+                self.best_val_score = metrics["core_auroc"]
                 self.best_score_updated = True
             
-        if desc == "test" and self.best_score_updated:
-            self.best_score_test = metrics["core_auroc"]
-        
-        best_score = self.best_score_test if desc == "test" else self.best_score
-        
-        return self.best_score_updated, best_score
+        if desc == "test":
+            self.best_test_score = metrics["core_auroc"]
+                
+        return self.best_score_updated, {"val": self.best_val_score, "test": self.best_test_score}
     
-    def load_best_score(self, best_score):
-        self.best_score = best_score
+    def load_state_dict(self, score_dict: Dict):
+        self.best_val_score = score_dict["val"]
+        self.best_test_score = score_dict["test"]
