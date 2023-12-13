@@ -27,7 +27,16 @@ import matplotlib.pyplot as plt
 import timm
 
 from copy import deepcopy
+ 
 
+def marginal_entropy(outputs):
+    '''Copied from https://github.com/zhangmarvin/memo/blob/main/cifar-10-exps/test_calls/test_adapt.py'''
+    logits = outputs - outputs.logsumexp(dim=-1, keepdim=True)
+    avg_logits = logits.logsumexp(dim=0) - np.log(logits.shape[0])
+    min_real = torch.finfo(avg_logits.dtype).min
+    avg_logits = torch.clamp(avg_logits, min=min_real)
+    return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1), avg_logits
+batched_marginal_entropy = vmap(marginal_entropy)
 
 @dataclass
 class MEMOConfig(BaselineConfig):
@@ -47,21 +56,12 @@ class MEMOConfig(BaselineConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
+    instance_norm: bool = True
     
     adaptation_steps: int = 1
+    adaptation_lr: float = 1e-4
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
-    
 
-
-def marginal_entropy(outputs):
-    '''Copied from https://github.com/zhangmarvin/memo/blob/main/cifar-10-exps/test_calls/test_adapt.py'''
-    logits = outputs - outputs.logsumexp(dim=-1, keepdim=True)
-    avg_logits = logits.logsumexp(dim=0) - np.log(logits.shape[0])
-    min_real = torch.finfo(avg_logits.dtype).min
-    avg_logits = torch.clamp(avg_logits, min=min_real)
-    return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1), avg_logits
-
-batched_marginal_entropy = vmap(marginal_entropy)
 
 class MEMOExperiment(BaselineExperiment): 
     config_class = MEMOConfig
@@ -79,14 +79,16 @@ class MEMOExperiment(BaselineExperiment):
                 selfT.size = (256, 256)
                 # Augmentation
                 selfT.transform = T.Compose([
-                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                    T.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                    T.RandomErasing(p=0.5, scale=(0.02, 0.1), ratio=(0.3, 3.3), value=0.5),
                     T.RandomHorizontalFlip(p=0.5),
                     T.RandomVerticalFlip(p=0.5),
                 ])  
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
-                patch = (patch - patch.min()) / (patch.max() - patch.min())
+                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                    if self.config.instance_norm else patch
                 patch = TVImage(patch)
                 # patch = T.ToImage()(patch)
                 # patch = T.ToTensor()(patch)
@@ -186,7 +188,7 @@ class MEMOExperiment(BaselineExperiment):
                 _images_augs = images_augs.reshape(-1, *images_augs.shape[2:]).cuda()
                 model = deepcopy(self.model)
                 model.eval()
-                optimizer = optim.SGD(model.parameters(), lr=1e-4)
+                optimizer = optim.SGD(model.parameters(), lr=self.config.adaptation_lr)
                 
                 for j in range(self.config.adaptation_steps):
                     optimizer.zero_grad()

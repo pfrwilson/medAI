@@ -37,6 +37,7 @@ class TTTConfig:
     adaptation_steps: int = 1
     beta_byol: float = 0.1 
     joint_training: bool = False
+    adaptation_lr: float = 1e-4
 
 
 class PPModelMLP(nn.Module):
@@ -153,6 +154,7 @@ class TTTModel(nn.Module):
         self.adaptation_steps = ttt_config.adaptation_steps
         self.beta_byol = ttt_config.beta_byol
         self.joint_training = ttt_config.joint_training
+        self.adaptation_lr = ttt_config.adaptation_lr
         
         # Create YShapeModel as model
         self.model = YShapeModel(ttt_config.y_shape_config)
@@ -172,7 +174,7 @@ class TTTModel(nn.Module):
         # Prepare test time training 
         adaptation_steps = 1 if training else self.adaptation_steps
         model = self.model if training else deepcopy(self.model)
-        optimizer = None if training else torch.optim.SGD(model.parameters(), lr=1e-4)
+        optimizer = None if training else torch.optim.SGD(model.parameters(), lr=self.adaptation_lr)
         
         # Train or test time train
         for i in range(adaptation_steps):

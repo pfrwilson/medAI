@@ -42,13 +42,17 @@ class MT3ExperimentConfig(BaselineConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
+    instance_norm: bool = True
+
     num_support_patches: int = 2
+    include_query_patch: bool = False
+
     
     mttt_anil: bool = True
     model_config: MT3Config = MT3Config(
         inner_steps=1, 
         inner_lr=0.001,
-        beta_byol=0.1
+        beta_byol=0.3,
         )
 
 
@@ -69,7 +73,8 @@ class MT3Experiment(BaselineExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
-                patch = (patch - patch.min()) / (patch.max() - patch.min())
+                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                    if self.config.instance_norm else patch
                 patch = TVImage(patch)
                 # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
@@ -85,7 +90,8 @@ class MT3Experiment(BaselineExperiment):
                 
                 # Augment support patches
                 transform = T.Compose([
-                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                    T.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                    T.RandomErasing(p=0.5, scale=(0.02, 0.1), ratio=(0.3, 3.3), value=0.5),
                     T.RandomHorizontalFlip(p=0.5),
                     T.RandomVerticalFlip(p=0.5),
                 ])   
@@ -114,7 +120,8 @@ class MT3Experiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )
@@ -133,7 +140,8 @@ class MT3Experiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )
@@ -152,7 +160,8 @@ class MT3Experiment(BaselineExperiment):
                 prostate_mask_threshold=self.config.prostate_mask_threshold,
             ),
             support_patch_config=SupportPatchConfig(
-                num_support_patches=self.config.num_support_patches
+                num_support_patches=self.config.num_support_patches,
+                include_query_patch=self.config.include_query_patch
             ),
             debug=self.config.debug,
         )

@@ -44,14 +44,16 @@ class TTTExperimentConfig(BaselineConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
+    instance_norm: bool = True
     
     num_support_patches: int = 2
     include_query_patch: bool = False
     
     model_config: TTTConfig = TTTConfig(
         adaptation_steps=1,
-        beta_byol=0.1,
+        beta_byol=0.3,
         joint_training=False,
+        adaptation_lr=1e-4,
         )
 
 
@@ -72,7 +74,8 @@ class TTTExperiment(BaselineExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
-                patch = (patch - patch.min()) / (patch.max() - patch.min())
+                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                    if self.config.instance_norm else patch
                 patch = TVImage(patch)
                 # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
@@ -88,7 +91,8 @@ class TTTExperiment(BaselineExperiment):
                 
                 # Augment support patches
                 transform = T.Compose([
-                    T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                    T.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                    T.RandomErasing(p=0.5, scale=(0.02, 0.1), ratio=(0.3, 3.3), value=0.5),
                     T.RandomHorizontalFlip(p=0.5),
                     T.RandomVerticalFlip(p=0.5),
                 ])   

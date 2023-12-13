@@ -80,6 +80,7 @@ class BaselineConfig(BasicExperimentConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
+    instance_norm: bool = True
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig = OptimizerConfig()
@@ -156,7 +157,8 @@ class BaselineExperiment(BasicExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
-                patch = (patch - patch.min()) / (patch.max() - patch.min())
+                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                    if self.config.instance_norm else patch
                 patch = TVImage(patch)
                 # patch = T.ToImage()(patch)
                 # patch = T.ToTensor()(patch)
