@@ -27,6 +27,9 @@ import timm
 
 from copy import copy
 
+# Avoids too many open files error from multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 
 @dataclass 
 class FourierTransformConfig:
@@ -62,7 +65,7 @@ class OptimizerConfig:
 class BaselineConfig(BasicExperimentConfig):
     """Configuration for the experiment."""
     # exp_dir: str = "./projects/tta/logs/first_experiment_test" 
-    name: str = "baseline_group_norm_res10"
+    name: str = "baseline_gn"
     group: str = None
     project: str = "tta" 
     entity: str = "mahdigilany"
@@ -80,7 +83,7 @@ class BaselineConfig(BasicExperimentConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
-    instance_norm: bool = True
+    instance_norm: bool = False
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig = OptimizerConfig()
@@ -157,6 +160,7 @@ class BaselineExperiment(BasicExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
+                patch = copy(patch)
                 patch = (patch - patch.min()) / (patch.max() - patch.min()) \
                     if self.config.instance_norm else patch
                 patch = TVImage(patch)
@@ -202,7 +206,7 @@ class BaselineExperiment(BasicExperiment):
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(
@@ -218,7 +222,7 @@ class BaselineExperiment(BasicExperiment):
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(

@@ -56,7 +56,7 @@ class MEMOConfig(BaselineConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
-    instance_norm: bool = True
+    instance_norm: bool = False
     
     adaptation_steps: int = 1
     adaptation_lr: float = 1e-4
@@ -127,7 +127,7 @@ class MEMOExperiment(BaselineExperiment):
             transform=Transform(augment=True),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(
@@ -143,7 +143,7 @@ class MEMOExperiment(BaselineExperiment):
             transform=Transform(augment=True),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(

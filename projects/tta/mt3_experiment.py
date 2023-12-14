@@ -42,7 +42,7 @@ class MT3ExperimentConfig(BaselineConfig):
     patch_size_mm: tp.Tuple[float, float] = (5, 5)
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     benign_to_cancer_ratio_test: tp.Optional[float] = None
-    instance_norm: bool = True
+    instance_norm: bool = False
 
     num_support_patches: int = 2
     include_query_patch: bool = False
@@ -131,7 +131,7 @@ class MT3Experiment(BaselineExperiment):
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(
@@ -151,7 +151,7 @@ class MT3Experiment(BaselineExperiment):
             transform=Transform(),
             cohort_selection_options=CohortSelectionOptions(
                 benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=self.config.min_invovlement,
+                min_involvement=None,
                 fold=self.config.fold
             ),
             patch_options=PatchOptions(
