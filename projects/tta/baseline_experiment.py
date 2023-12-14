@@ -125,7 +125,7 @@ class BaselineExperiment(BasicExperiment):
         
         # Setup epoch and best score
         self.epoch = 0 
-        self.best_score = {"val": 0.0, "test": 0.0}
+        self.best_score = self.metric_calculator._get_best_score_dict()
         
         # Load checkpoint if exists
         if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
@@ -139,7 +139,7 @@ class BaselineExperiment(BasicExperiment):
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
-            self.metric_calculator.load_state_dict(state["best_score"])
+            self.metric_calculator.initialize_best_score(state["best_score"])
             self.save_states(save_model=False) # Free up model space
             
 
@@ -243,11 +243,6 @@ class BaselineExperiment(BasicExperiment):
         self.test_loader = DataLoader(
             test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
         )
-
-        # self.test_loaders = {
-        #     "val": self.val_loader,
-        #     "test": self.test_loader
-        # }
         
     def setup_metrics(self):
         self.metric_calculator = MetricCalculator()
@@ -373,7 +368,7 @@ class BaselineExperiment(BasicExperiment):
     def log_metrics(self, desc):
         metrics = self.metric_calculator.get_metrics()
         
-        # Reset metrics for each epoch
+        # Reset metrics after each epoch
         self.metric_calculator.reset()
         
         # Update best score
@@ -390,10 +385,7 @@ class BaselineExperiment(BasicExperiment):
             f"{desc}/{key}": value for key, value in metrics.items()
             }
         metrics_dict.update({"epoch": self.epoch})
-        metrics_dict.update({
-            "val/best_core_auroc": best_score["val"],
-            "test/best_core_auroc": best_score["test"],
-            }) if desc == "val" else None 
+        metrics_dict.update(best_score) if desc == "val" else None 
         wandb.log(
             metrics_dict,
             commit=True

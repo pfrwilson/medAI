@@ -26,7 +26,7 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import timm
 
-from copy import deepcopy
+from copy import deepcopy, copy
  
 
 def marginal_entropy(outputs):
@@ -87,11 +87,10 @@ class MEMOExperiment(BaselineExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
+                patch = copy(patch)
                 patch = (patch - patch.min()) / (patch.max() - patch.min()) \
                     if self.config.instance_norm else patch
                 patch = TVImage(patch)
-                # patch = T.ToImage()(patch)
-                # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
                 
                 label = torch.tensor(item["grade"] != "Benign").long()

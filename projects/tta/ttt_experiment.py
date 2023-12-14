@@ -25,6 +25,7 @@ from einops import rearrange, repeat
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from copy import deepcopy, copy
 
 @dataclass
 class TTTExperimentConfig(BaselineConfig):
@@ -74,19 +75,20 @@ class TTTExperiment(BaselineExperiment):
             
             def __call__(selfT, item):
                 patch = item.pop("patch")
+                patch = copy(patch)
                 patch = (patch - patch.min()) / (patch.max() - patch.min()) \
                     if self.config.instance_norm else patch
                 patch = TVImage(patch)
-                # patch = T.ToTensor()(patch)
                 patch = T.Resize(selfT.size, antialias=True)(patch).float()
 
+                # Support patches
                 support_patches = item.pop("support_patches")
+                support_patches = copy(support_patches)
                 # Normalize support patches along last two dimensions
                 support_patches = (support_patches - support_patches.min(axis=(1, 2), keepdims=True)) \
                 / (support_patches.max(axis=(1,2), keepdims=True) \
-                    - support_patches.min(axis=(1, 2), keepdims=True))
+                    - support_patches.min(axis=(1, 2), keepdims=True)) if self.config.instance_norm else support_patches
                 support_patches = TVImage(support_patches)
-                # support_patches = T.ToTensor()(support_patches)
                 support_patches = T.Resize(selfT.size, antialias=True)(support_patches).float()
                 
                 # Augment support patches

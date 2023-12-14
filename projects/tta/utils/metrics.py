@@ -27,9 +27,8 @@ class MetricCalculator(object):
         self.avg_core_logits_first = avg_core_logits_first
         self.high_inv_thresh = high_inv_thresh
         self.include_all_inv = include_all_inv
-        self.best_val_score = 0.0
-        self.best_test_score = 0.0
         self.best_score_updated = False
+        self.initialize_best_score()
         self.reset()
 
     def reset(self):
@@ -126,18 +125,46 @@ class MetricCalculator(object):
             metrics[prefix + metric_name] = metric_value
         return metrics
 
+    def _get_best_score_dict(self):
+        return {
+            "val/best_core_auroc": self.best_val_score,
+            "val/best_patch_auroc": self.best_val_patch_score,
+            "val/best_all_inv_core_auroc": self.best_all_inv_val_score,
+            "test/best_core_auroc": self.best_test_score,
+            "test/best_patch_auroc": self.best_test_patch_score,
+            "test/best_all_inv_core_auroc": self.best_all_inv_test_score,
+        }
+    
+    def initialize_best_score(self, best_score_dict: Dict = None):
+        if best_score_dict is None:
+            self.best_val_score = 0.0
+            self.best_val_patch_score = 0.0
+            self.best_all_inv_val_score = 0.0
+            self.best_test_score = 0.0
+            self.best_test_patch_score = 0.0
+            self.best_all_inv_test_score = 0.0
+        else:
+            self.best_val_score = best_score_dict["val/best_core_auroc"]
+            self.best_val_patch_score = best_score_dict["val/best_patch_auroc"]
+            self.best_all_inv_val_score = best_score_dict["val/best_all_inv_core_auroc"]
+            self.best_test_score = best_score_dict["test/best_core_auroc"]
+            self.best_test_patch_score = best_score_dict["test/best_patch_auroc"]
+            self.best_all_inv_test_score = best_score_dict["test/best_all_inv_core_auroc"]
+            
+        return self._get_best_score_dict()
+    
     def update_best_score(self, metrics, desc):
         self.best_score_updated = False
             
         if desc == "val" and metrics["core_auroc"] >= self.best_val_score:
                 self.best_val_score = metrics["core_auroc"]
+                self.best_val_patch_score = metrics["patch_auroc"]
+                self.best_all_inv_val_score = metrics["all_inv_core_auroc"]
                 self.best_score_updated = True
             
         if desc == "test":
             self.best_test_score = metrics["core_auroc"]
+            self.best_test_patch_score = metrics["patch_auroc"]
+            self.best_all_inv_test_score = metrics["all_inv_core_auroc"]
                 
-        return self.best_score_updated, {"val": self.best_val_score, "test": self.best_test_score}
-    
-    def load_state_dict(self, score_dict: Dict):
-        self.best_val_score = score_dict["val"]
-        self.best_test_score = score_dict["test"]
+        return self.best_score_updated, self._get_best_score_dict()
