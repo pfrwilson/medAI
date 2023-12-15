@@ -16,5 +16,6 @@ setup(
         "tqdm", 
         "coolname", 
         "wandb",
+        "mat73"
     ], 
 )
