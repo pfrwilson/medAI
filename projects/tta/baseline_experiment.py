@@ -26,6 +26,9 @@ import matplotlib.pyplot as plt
 import timm
 
 from copy import copy
+from simple_parsing import subgroups
+from utils.sam_optimizer import SAM
+
 
 # Avoids too many open files error from multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -59,6 +62,13 @@ class OptimizerConfig:
     lr: float = 1e-4
     weight_decay: float = 0.0
     momentum: float = 0.9
+    
+@dataclass
+class SAMOptimizerConfig:
+    optimizer = torch.optim.Adam
+    lr: float = 1e-4
+    rho: float = 0.05
+    # momentum: float = 0.9
 
 
 @dataclass
@@ -86,7 +96,10 @@ class BaselineConfig(BasicExperimentConfig):
     instance_norm: bool = False
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
-    optimizer_config: OptimizerConfig = OptimizerConfig()
+    optimizer_config: OptimizerConfig | SAMOptimizerConfig = subgroups(
+        {"regular": OptimizerConfig, "sam": SAMOptimizerConfig},
+        default="regular"
+    )
     fourier_transform_config: FourierTransformConfig = FourierTransformConfig()
     
         
@@ -116,7 +129,18 @@ class BaselineExperiment(BasicExperiment):
         self.model = self.setup_model()
         self.model = self.model.cuda()
         
-        self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
+        if isinstance(self.config.optimizer_config, SAMOptimizerConfig):
+            assert isinstance(self, BaselineExperiment), "SAM only works with baseline experiment"
+            self.optimizer = SAM(
+                self.model.parameters(),
+                self.config.optimizer_config.optimizer,
+                lr=self.config.optimizer_config.lr,
+                rho=self.config.optimizer_config.rho,
+                # momentum=self.config.optimizer_config.momentum,
+            )
+        else:
+            self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
+        
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
@@ -337,8 +361,17 @@ class BaselineExperiment(BasicExperiment):
                 
                 # Optimizer step
                 if train:
-                    loss.backward()                
-                    self.optimizer.step()
+                    loss.backward() 
+                    
+                    if isinstance(self.optimizer, SAM):
+                        self.optimizer.first_step(zero_grad=True)
+                        loss2 = criterion(self.model(images), labels)
+                        loss2.backward()
+                        loss = loss2.detach().clone()
+                        self.optimizer.second_step(zero_grad=True)                 
+                    else:                                       
+                        self.optimizer.step()
+                    
                     self.scheduler.step()
                     wandb.log({"lr": self.scheduler.get_last_lr()[0]})
                              
