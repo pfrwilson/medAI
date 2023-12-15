@@ -156,6 +156,26 @@ class SubmititJobSubmissionConfig:
     mem_gb: int = 16
     cpus_per_task: int = 16
     slurm_qos: tp.Literal["normal", "m2", "m3", "m4"] = "m2"
+    slurm_setup: list[str] = field(default_factory=lambda: [
+        "module load pytorch2.1-cuda11.8-python3.10",
+        "export PYTHONPATH=$PYTHONPATH:/h/pwilson/projects/medAI",
+    ])
+
+# might use this later
+@dataclass
+class SlurmJobConfig: 
+    gres: str = "gpu:1"
+    mem: str = "16GB"
+    cpus_per_task: int = 16
+    gpus_per_task: int = 1
+    qos: tp.Literal["normal", "m2", "m3", "m4"] = "m2"
+    time: str = "2:00:00"
+    ntasks_per_node: int = 1
+    nodes: int = 1
+    setup: list[str] = field(default_factory=lambda: [
+        "module load pytorch2.1-cuda11.8-python3.10",
+        "export PYTHONPATH=$PYTHONPATH:/h/pwilson/projects/medAI",
+    ])
 
 
 @dataclass
@@ -305,38 +325,51 @@ class BasicExperiment:
         logging.info(f"Resubmitting myself.")
         return DelayedSubmission(new_job)
 
+    @staticmethod
+    def get_submitit_executor(config): 
+        if isinstance(config.cluster, LocalJobSubmissionConfig): 
+            return None 
+        
+        elif isinstance(config.cluster, SlurmJobConfig):
+            executor = SlurmExecutor(
+                folder=os.path.join(config.exp_dir, "submitit_logs"),
+                max_num_timeout=10,
+            )
+            executor.update_parameters(**asdict(config.cluster))
+            return executor
+
+        elif isinstance(config.cluster, SubmititJobSubmissionConfig):
+            executor = submitit.AutoExecutor(
+                folder=os.path.join(config.exp_dir, "submitit_logs"),
+                slurm_max_num_timeout=10,
+            )
+
+            executor.update_parameters(**asdict(config.cluster))
+            return executor
+        else:
+            raise ValueError(f"Invalid cluster type: {config.cluster}")
+
+    @classmethod 
+    def parse_args(cls): 
+        parser = ArgumentParser()
+        parser.add_arguments(cls.config_class, dest="config")
+        return parser.parse_args().config
+
     @classmethod
     def submit(cls):
         from simple_parsing import ArgumentParser
 
-        parser = ArgumentParser()
-        parser.add_arguments(cls.config_class, dest="config")
-        parser.add_argument(
-            "--config_path", type=str, default=None, help="Path to a config file."
-        )
-        args = parser.parse_args()
-        if args.config_path is not None:
-            cfg = cls.config_class.load_yaml(args.config_path)
-            logging.info(f"Loaded config from {args.config_path}")
-        else:
-            cfg = args.config
-
+        cfg = cls.parse_args()
+        executor = cls.get_submitit_executor(cfg)
         job = cls(cfg)
-        if isinstance(cfg.cluster, LocalJobSubmissionConfig):
-            job()
-
-        elif isinstance(cfg.cluster, SubmititJobSubmissionConfig):
-            os.makedirs(cfg.exp_dir, exist_ok=True)
-            executor = submitit.AutoExecutor(
-                folder=os.path.join(cfg.exp_dir, "submitit_logs"),
-                slurm_max_num_timeout=10,
-            )
-
-            executor.update_parameters(**asdict(cfg.cluster))
+       
+        if executor is not None: 
             job = executor.submit(job)
             print(f"Submitted job: {job.job_id}")
             print(f"Outputs: {job.paths.stdout}")
             print(f"Errors: {job.paths.stderr}")
+        else: 
+            job()
 
 
 # TODO: finish and test this
