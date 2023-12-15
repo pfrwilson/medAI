@@ -3,7 +3,7 @@ import torch
 
 
 class MLP(torch.nn.Module):
-    def __init__(self, *inner_dims, dropout=0.1, use_batchnorm=True):
+    def __init__(self, *inner_dims, dropout=0, use_batchnorm=False):
         super().__init__()
         self.layers = torch.nn.ModuleList()
         for i in range(len(inner_dims) - 1):

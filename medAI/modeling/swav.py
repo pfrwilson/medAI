@@ -4,7 +4,7 @@ import logging
 
 
 class SwAV(nn.Module): 
-    def __init__(self, backbone, features_dim, n_prototypes, n_stored_features, projector_dims=None, lambda_=20, n_sinkhorn_iters=10): 
+    def __init__(self, backbone, features_dim, n_prototypes, n_stored_features, projector_dims=None, eps=0.05, n_sinkhorn_iters=3): 
         super().__init__()
 
         self.backbone = backbone 
@@ -12,7 +12,7 @@ class SwAV(nn.Module):
         self.n_prototypes=n_prototypes
         self.n_stored_features = n_stored_features
         self.projector_dims = projector_dims
-        self.lambda_ = lambda_
+        self.eps = eps
         self.n_sinkhorn_iters=n_sinkhorn_iters
 
         # sync batchnorm in case of multi-gpu training, where model 
@@ -76,20 +76,9 @@ class SwAV(nn.Module):
             P_ref = Z @ Q.T
             P_ref = torch.cat([P, P_ref])
 
-            # compute optimal assignment of prototypes to features
-            n_targets = P_ref.shape[0]
-            n_sources = P_ref.shape[1]
-            K = torch.exp(self.lambda_ * P_ref) # starting point for sinkhorn iterations 
-
-            # each feature should be the target of partial assignments adding up to 1
-            target_row_sum = torch.ones((n_targets, 1), dtype=P_ref.dtype, device=P_ref.device)
-
-            # each source should be assigned to the targets uniformly, so that the total number of 
-            # assignments by a certain target should sum to n_targets/n_sources
-            target_column_sum = torch.ones((n_sources, 1), dtype=P_ref.dtype, device=P_ref.device) * n_targets / n_sources
-
-            C = sinkhorn_knopp(K, target_row_sum, target_column_sum, n_iters=self.n_sinkhorn_iters)
+            C = sinkhorn_knopp(P_ref, self.eps, self.n_sinkhorn_iters)
             C = C[:B, :]
+            C = C.softmax(-1)
 
         return P, C 
 
@@ -101,23 +90,18 @@ class SwAV(nn.Module):
             self.q_frozen = False
 
 
-def sinkhorn_knopp(K, r, c, n_iters=10): 
-    """Uses Sinkhorn Knopp iteration algorithm to compute the unique 
-    matrix of the form P = diag(u) @ K @ diag(v) such that the row
-    sums of P are r and the column sums of P are c.                                                                      
-    """
-    assert torch.sum(r) == torch.sum(c), "Marginals must sum to the same value"
-    assert torch.all(torch.abs(K) == K), "Input matrix must be positive"
-
-    u = torch.ones_like(r)
-    v = torch.ones_like(c)
-
-    for _ in range(n_iters): 
-        u = r / (K @ v) 
-        v = c / (K.T @ u)
-
-    u = torch.diag_embed(u[:, 0]) 
-    v = torch.diag_embed(v[:, 0]) 
-    P = u @ K @ v 
-
-    return P
+def sinkhorn(scores, eps=0.05, niters=3):
+    Q = torch.exp(scores / eps).T
+    Q /= torch.sum(Q)
+    K, B = Q.shape
+    u, r, c = (
+        torch.zeros(K, device=scores.device),
+        torch.ones(K, device=scores.device) / K,
+        torch.ones(B, device=scores.device) / B,
+    )
+    for _ in range(niters):
+        u = torch.sum(Q, dim=1)
+        Q *= (r / u).unsqueeze(1)
+        Q *= (c / torch.sum(Q, dim=0)).unsqueeze(0)
+    return (Q / torch.sum(Q, dim=0, keepdim=True)).T
+    

@@ -30,7 +30,7 @@ BMODE_DATA_PATH = os.path.join(
 )
 
 
-def get_patient_splits(fold=0, n_folds=5):
+def get_patient_splits_by_fold(fold=0, n_folds=5):
     """returns the list of patient ids for the train, val, and test splits."""
     if n_folds == 5:
         # we manually override the this function and use the csv file
@@ -64,6 +64,24 @@ def get_patient_splits(fold=0, n_folds=5):
     train = train.id.values.tolist()
     val = val.id.values.tolist()
     test = test.id.values.tolist()
+
+    return train, val, test
+
+
+def get_patient_splits_by_center(leave_out="UVA"): 
+    """returns the list of patient ids for the train, val, and test splits."""
+    if leave_out not in ['UVA', 'CRCEO', 'PCC', 'PMCC', 'JH']: 
+        raise ValueError(f"leave_out must be one of 'UVA', 'CRCEO', 'PCC', 'PMCC', 'JH', but got {leave_out}")
+
+    table = PATIENT
+
+    train = table[table.center != leave_out]
+    train, val = train_test_split(
+        train, test_size=0.2, random_state=0, stratify=train["center"]
+    )
+    train = train.id.values.tolist()
+    val = val.id.values.tolist()
+    test = table[table.center == leave_out].id.values.tolist()
 
     return train, val, test
 
@@ -114,14 +132,23 @@ def undersample_benign(cores, seed=0, benign_to_cancer_ratio=1):
 
 @dataclass
 class CohortSelectionOptions:
-    fold: int = 0
-    n_folds: int = 5
     min_involvement: float = None
     remove_benign_from_positive_patients: bool = False
     benign_to_cancer_ratio: float = None
     seed: int = 0
 
 
+@dataclass 
+class KFoldCohortSelectionOptions(CohortSelectionOptions):
+    fold: int = 0
+    n_folds: int = 5
+
+
+@dataclass 
+class LeaveOneCenterOutCohortSelectionOptions(CohortSelectionOptions): 
+    leave_out: tp.Literal['UVA', 'CRCEO', 'PCC', 'PMCC', 'JH'] = 'UVA'
+
+    
 def select_cohort(
     split: str = "train",
     cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
@@ -132,9 +159,17 @@ def select_cohort(
             f"Split must be 'train', 'val', 'test' or 'all, but got {split}"
         )
 
-    train, val, test = get_patient_splits(
-        cohort_selection_options.fold, cohort_selection_options.n_folds
-    )
+    if isinstance(cohort_selection_options, KFoldCohortSelectionOptions):
+        train, val, test = get_patient_splits_by_fold(
+            cohort_selection_options.fold, cohort_selection_options.n_folds
+        )
+    elif isinstance(cohort_selection_options, LeaveOneCenterOutCohortSelectionOptions):
+        train, val, test = get_patient_splits_by_center(
+            cohort_selection_options.leave_out
+        ) 
+    else: 
+        raise NotImplementedError
+            
     match split:
         case "train":
             patient_ids = train
@@ -470,7 +505,7 @@ def extract_patches(
     return image_patches, pos """
 
 
-@dataclass
+@dataclass(frozen=True)
 class PatchOptions:
     """Options for generating a set of patches from a core."""
 
@@ -672,6 +707,7 @@ class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
             transform=transform,
             patch_options=patch_options,
         )
+
 
 
 """ 
