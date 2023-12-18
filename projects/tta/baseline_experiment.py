@@ -29,6 +29,13 @@ from copy import copy
 from simple_parsing import subgroups
 from utils.sam_optimizer import SAM
 
+from datasets.datasets import ExactNCT2013RFImagePatches
+from medAI.datasets.nct2013 import (
+    KFoldCohortSelectionOptions,
+    LeaveOneCenterOutCohortSelectionOptions, 
+    PatchOptions
+)
+
 
 # Avoids too many open files error from multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -85,15 +92,20 @@ class BaselineConfig(BasicExperimentConfig):
     
     epochs: int = 50
     batch_size: int = 32
-    fold: int = 0
     
-    min_invovlement: int = 40
-    needle_mask_threshold: float = 0.6
-    prostate_mask_threshold: float = 0.9
-    patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
-    benign_to_cancer_ratio_test: tp.Optional[float] = None
     instance_norm: bool = False
+    min_involvement_train: int = 40.
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    remove_benign_from_positive_patients_train: bool = True
+    patch_config: PatchOptions = PatchOptions(
+        needle_mask_threshold = 0.6,
+        prostate_mask_threshold = 0.9,
+        patch_size_mm = (5, 5)
+    )
+    cohort_selection_config: KFoldCohortSelectionOptions | LeaveOneCenterOutCohortSelectionOptions = subgroups(
+        {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='JH')},
+        default="kfold"
+    )
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
     optimizer_config: OptimizerConfig | SAMOptimizerConfig = subgroups(
@@ -206,54 +218,32 @@ class BaselineExperiment(BasicExperiment):
                 return patch, label, item
 
 
-        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions, PatchOptions
-        
+        cohort_selection_options_train = copy(self.config.cohort_selection_config)
+        cohort_selection_options_train.min_involvement = self.config.min_involvement_train
+        cohort_selection_options_train.benign_to_cancer_ratio = self.config.benign_to_cancer_ratio_train
+        cohort_selection_options_train.remove_benign_from_positive_patients = self.config.remove_benign_from_positive_patients_train
+            
         train_ds = ExactNCT2013RFImagePatches(
             split="train",
             transform=Transform(augment=False),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
-                min_involvement=self.config.min_invovlement,
-                remove_benign_from_positive_patients=True,
-                fold=self.config.fold,
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=cohort_selection_options_train,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
         
         val_ds = ExactNCT2013RFImagePatches(
             split="val",
             transform=Transform(),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=None,
-                fold=self.config.fold
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
                 
         test_ds = ExactNCT2013RFImagePatches(
             split="test",
             transform=Transform(),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=None,
-                fold=self.config.fold
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
 

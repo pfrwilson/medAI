@@ -27,6 +27,15 @@ import matplotlib.pyplot as plt
 import timm
 
 from copy import deepcopy, copy
+from simple_parsing import subgroups
+
+from datasets.datasets import ExactNCT2013RFImagePatches
+from medAI.datasets.nct2013 import (
+    KFoldCohortSelectionOptions,
+    LeaveOneCenterOutCohortSelectionOptions, 
+    PatchOptions
+)
+
  
 
 def marginal_entropy(outputs):
@@ -50,13 +59,20 @@ class MEMOConfig(BaselineConfig):
     batch_size: int = 32
     batch_size_test: int = 32
     shffl_test: bool = False
-    fold: int = 0
-    
-    min_invovlement: int = 40
-    patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
-    benign_to_cancer_ratio_test: tp.Optional[float] = None
+
     instance_norm: bool = False
+    min_involvement_train: int = 40.
+    benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
+    remove_benign_from_positive_patients_train: bool = True
+    patch_config: PatchOptions = PatchOptions(
+        needle_mask_threshold = 0.6,
+        prostate_mask_threshold = 0.9,
+        patch_size_mm = (5, 5)
+    )
+    cohort_selection_config: KFoldCohortSelectionOptions | LeaveOneCenterOutCohortSelectionOptions = subgroups(
+        {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='JH')},
+        default="kfold"
+    )
     
     adaptation_steps: int = 1
     adaptation_lr: float = 1e-4
@@ -100,56 +116,34 @@ class MEMOExperiment(BaselineExperiment):
                     return patch_augs, patch, label, item
                 
                 return -1, patch, label, item
-
-
-        from datasets.datasets import ExactNCT2013RFImagePatches, CohortSelectionOptions, PatchOptions
+        
+        
+        cohort_selection_options_train = copy(self.config.cohort_selection_config)
+        cohort_selection_options_train.min_involvement = self.config.min_involvement_train
+        cohort_selection_options_train.benign_to_cancer_ratio = self.config.benign_to_cancer_ratio_train
+        cohort_selection_options_train.remove_benign_from_positive_patients = self.config.remove_benign_from_positive_patients_train
         
         train_ds = ExactNCT2013RFImagePatches(
             split="train",
             transform=Transform(augment=False),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_train,
-                min_involvement=self.config.min_invovlement,
-                remove_benign_from_positive_patients=True,
-                fold=self.config.fold,
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=cohort_selection_options_train,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
         
         val_ds = ExactNCT2013RFImagePatches(
             split="val",
             transform=Transform(augment=True),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=None,
-                fold=self.config.fold
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
                 
         test_ds = ExactNCT2013RFImagePatches(
             split="test",
             transform=Transform(augment=True),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_to_cancer_ratio_test,
-                min_involvement=None,
-                fold=self.config.fold
-            ),
-            patch_options=PatchOptions(
-                patch_size_mm=self.config.patch_size_mm,
-                needle_mask_threshold=self.config.needle_mask_threshold,
-                prostate_mask_threshold=self.config.prostate_mask_threshold,
-            ),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
 
@@ -163,11 +157,6 @@ class MEMOExperiment(BaselineExperiment):
         self.test_loader = DataLoader(
             test_ds, batch_size=self.config.batch_size_test, shuffle=self.config.shffl_test, num_workers=4
         )
-
-        # self.test_loaders = {
-        #     "val": self.val_loader,
-        #     "test": self.test_loader
-        # }
 
     def run_epoch(self, loader, train=True, desc="train"):
         self.model.train() if train else self.model.eval()
@@ -187,7 +176,7 @@ class MEMOExperiment(BaselineExperiment):
                 _images_augs = images_augs.reshape(-1, *images_augs.shape[2:]).cuda()
                 model = deepcopy(self.model)
                 model.eval()
-                optimizer = optim.SGD(model.parameters(), lr=self.config.adaptation_lr)
+                optimizer = optim.SGD(model.parameters(), lr=self.scheduler.get_last_lr()[0])#self.config.adaptation_lr)
                 
                 for j in range(self.config.adaptation_steps):
                     optimizer.zero_grad()

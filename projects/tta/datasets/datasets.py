@@ -18,32 +18,11 @@ from medAI.datasets.nct2013 import DATA_ROOT, ExactNCT2013RFImages
 from medAI.datasets.nct2013 import ExactNCT2013RFImagesWithAutomaticProstateSegmentation
 from medAI.datasets.nct2013 import _ExactNCT2013DatasetWithAutomaticProstateSegmentation
 from medAI.datasets.nct2013 import compute_base_positions, compute_mask_intersections, select_patch
+from medAI.datasets.nct2013 import CohortSelectionOptions, KFoldCohortSelectionOptions, LeaveOneCenterOutCohortSelectionOptions, PatchOptions
 
 
 RF_DATA_PATH = os.path.join(DATA_ROOT, "cores_dataset")
 
-@dataclass
-class CohortSelectionOptions:
-    fold: int = 0
-    n_folds: int = 5
-    min_involvement: float = None
-    remove_benign_from_positive_patients: bool = False
-    benign_to_cancer_ratio: float = None
-    seed: int = 0
-
-@dataclass
-class PatchOptions:
-    """Options for generating a set of patches from a core."""
-
-    patch_size_mm: tp.Tuple[float, float] = (5, 5)
-    strides: tp.Tuple[float, float] = (
-        1,
-        1,
-    )  # defines the stride in mm of the base positions
-    needle_mask_threshold: float = 0.5  # if not None, then only positions with a needle mask intersection greater than this value are kept
-    prostate_mask_threshold: float = -1
-    shift_delta_mm: float = 0.0  # whether to randomly shift the patch by a small amount
-    # output_size_px: tp.Tuple[int, int] | None = None # if not None, then the patch is resized to this size in pixels
 
 '''
 class ExactNCT2013RFImagesWithProstateSegmenation(ExactNCT2013RFImages, ABC):
@@ -295,7 +274,7 @@ class ExactNCT2013RFImagePatches(_ExactNCTPatchesDataset):
         split="train",
         transform=None,
         prescale_image: bool = False,
-        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cohort_selection_options: CohortSelectionOptions = KFoldCohortSelectionOptions(),
         patch_options: PatchOptions = PatchOptions(),
         debug: bool = False,
     ):
@@ -325,7 +304,7 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
         split="train",
         transform=None,
         prescale_image: bool = False,
-        cohort_selection_options: CohortSelectionOptions = CohortSelectionOptions(),
+        cohort_selection_options: CohortSelectionOptions = KFoldCohortSelectionOptions(),
         patch_options: PatchOptions = PatchOptions(),
         support_patch_config: SupportPatchConfig = SupportPatchConfig(),
         debug: bool = False,
