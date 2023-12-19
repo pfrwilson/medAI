@@ -220,7 +220,7 @@ class Ensemblexperiment(BaselineExperiment):
                 
                 # Zero gradients
                 if train:
-                    [optimizer.zero_grad() for optimizer in self.optimizers]
+                    self.optimizer.zero_grad()
                 
                 logits = self.model(self.params, self.buffers, images)
                 
