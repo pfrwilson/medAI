@@ -154,6 +154,8 @@ class MetricCalculator(object):
         return self._get_best_score_dict()
     
     def update_best_score(self, metrics, desc):
+        """This function assumes test is after val and it should receive metrics from val first
+        Also, it should receive metrics to calculate the best score"""
         self.best_score_updated = False
             
         if desc == "val" and metrics["core_auroc"] >= self.best_val_score:

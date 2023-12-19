@@ -139,7 +139,6 @@ class BaselineExperiment(BasicExperiment):
 
         logging.info('Setting up model, optimizer, scheduler')
         self.model = self.setup_model()
-        self.model = self.model.cuda()
         
         if isinstance(self.config.optimizer_config, SAMOptimizerConfig):
             assert isinstance(self, BaselineExperiment), "SAM only works with baseline experiment"
@@ -301,7 +300,8 @@ class BaselineExperiment(BasicExperiment):
                 self.fourier_transform,
                 model,
             )
-            
+        
+        model = model.cuda()
         return model
     
     def save_states(self, best_model=False, save_model=False):
