@@ -151,8 +151,8 @@ def basic_ddp_experiment_setup(
 class SubmititJobSubmissionConfig:
     """Configuration for running the job in a slurm cluster using submitit."""
 
-    timeout_min: int = 60 * 2
-    slurm_gres: str = "gpu:1"
+    timeout_min: int = 60 * 10
+    slurm_gres: str = "gpu:a40:1"
     mem_gb: int = 16
     cpus_per_task: int = 16
     slurm_qos: tp.Literal["normal", "m2", "m3", "m4"] = "m2"
@@ -164,12 +164,12 @@ class SubmititJobSubmissionConfig:
 # might use this later
 @dataclass
 class SlurmJobConfig: 
-    gres: str = "gpu:1"
+    gres: str = "gpu:a40:1"
     mem: str = "16GB"
     cpus_per_task: int = 16
     gpus_per_task: int = 1
     qos: tp.Literal["normal", "m2", "m3", "m4"] = "m2"
-    time: str = "2:00:00"
+    time: str = "10:00:00"
     ntasks_per_node: int = 1
     nodes: int = 1
     setup: list[str] = field(default_factory=lambda: [

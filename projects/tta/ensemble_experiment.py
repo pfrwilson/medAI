@@ -40,8 +40,8 @@ from medAI.datasets.nct2013 import (
 @dataclass
 class EnsembleConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "ensemble"
-    resume: bool = False
+    name: str = "ensemble_gn_5mdls"
+    resume: bool = True
     debug: bool = False
     use_wandb: bool = True
     
@@ -62,7 +62,7 @@ class EnsembleConfig(BaselineConfig):
         default="kfold"
     )
     
-    num_ensembles: int = 10
+    num_ensembles: int = 5
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
 
 
@@ -85,9 +85,8 @@ class Ensemblexperiment(BaselineExperiment):
                 self.run_epoch(self.test_loader, train=False, desc="test")
                 for i, if_updated in enumerate(self.list_best_score_updated):
                     if if_updated:
-                        self.save_states(best_model=i)
+                        self.save_states(model_idx=i)
 
-         
     def setup(self):
         # logging setup
         super(BaselineExperiment, self).setup()
@@ -106,7 +105,7 @@ class Ensemblexperiment(BaselineExperiment):
         # self.optimizer = create_optimizer(self.config.optimizer_config, params)
         
         self.optimizer = optim.Adam(
-            self.params,
+            self.params.values(),
             lr=self.config.optimizer_config.lr,
             weight_decay=self.config.optimizer_config.weight_decay
             )
@@ -138,8 +137,7 @@ class Ensemblexperiment(BaselineExperiment):
             state = None
             
         if state is not None:
-            [model.load_state_dict(state["list_models"][i])\
-                for i, model in enumerate(self.list_models)]
+            self._set_param_buffer_data(*state["param_buffer_data"])
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
@@ -153,12 +151,10 @@ class Ensemblexperiment(BaselineExperiment):
         logging.info(f"""Trainable parameters: 
                      {self.config.num_ensembles*sum(p.numel() for p in self.list_models[0].parameters() if p.requires_grad)}""")
 
-    def save_states(self, best_model=None, save_model=False):
+    def save_states(self, model_idx=None, save_model=False):
         torch.save(
             {   
-                "list_models": [self.list_models[i].state_dict()\
-                    for i in range(self.config.num_ensembles)]\
-                        if save_model else None,
+                "param_buffer_data": self._get_param_buffer_data() if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
@@ -169,39 +165,76 @@ class Ensemblexperiment(BaselineExperiment):
                 "experiment.ckpt",
             )
         )
-        if best_model:
+        if model_idx is not None:
             torch.save(
                 {   
-                    f"model_{best_model}": self.list_models[best_model].state_dict(),
-                    f"best_score_{best_model}": self.best_scores[best_model],
+                    f"param_buffer_{model_idx}": self._get_param_buffer_data(model_idx),
+                    f"best_score_{model_idx}": self.list_best_score[model_idx],
                 },
                 os.path.join(
                     self.ckpt_dir,
-                    f"best_model_{best_model}.ckpt",
+                    f"best_model_{model_idx}.ckpt",
                 )
             )
 
+    def _get_param_buffer_data(self, model_idx=None):
+        param_data = {}
+
+        # Iterate through the model's parameters and save their values
+        for name, param in self.params.items():
+            param_data[name] = param.data
+        
+        buffer_data = {}
+        
+        # Iterate through the model's buffers and save their values
+        for name, buffer in self.buffers.items():
+            buffer_data[name] = buffer.data
+
+        if model_idx is not None:
+            return param_data[model_idx, ...], buffer_data[model_idx, ...]
+        
+        return param_data, buffer_data
+    
+    def _set_param_buffer_data(self, param_data, buffer_data, model_idx=None):
+        # Iterate through the model's parameters and load their values
+        for item, data_item in zip(self.params.items(), param_data.items()):
+            name = item[0]
+            param = item[1]
+            if model_idx is not None:
+                param.data[model_idx, ...] = data_item[1].data
+            else:
+                param.data = data_item[1].data
+        
+        # Iterate through the model's buffers and load their values
+        for item, buffer_item in zip(self.buffers.items(), buffer_data.items()):
+            name = item[0]
+            buffer = item[1]
+            if model_idx is not None:
+                buffer.data[model_idx, ...] = buffer_item[1].data
+            else:
+                buffer.data = buffer_item[1].data
+    
     def setup_model(self):
         models = [super(Ensemblexperiment, self).setup_model() for _ in range(self.config.num_ensembles)]
         return models
     
     def setup_vmap_model(self):
-        # from torch.func import stack_module_state
-        # from torch.func import functional_call
-        from functorch import combine_state_for_ensemble
+        from torch.func import stack_module_state
+        from torch.func import functional_call
+        # from functorch import combine_state_for_ensemble
         
         # Stack model state
-        # self.params, self.buffers = stack_module_state(self.list_models)
-        fmodel, self.params, self.buffers = combine_state_for_ensemble(self.list_models)
-        [p.requires_grad_() for p in self.params]
+        self.params, self.buffers = stack_module_state(self.list_models)
+        # fmodel, self.params, self.buffers = combine_state_for_ensemble(self.list_models)
+        # [p.requires_grad_() for p in self.params]
 
-        # # Construct a "stateless" version of one of the models. It is "stateless" in
-        # # the sense that the parameters are meta Tensors and do not have storage.
-        # base_model = deepcopy(self.list_models[0])
-        # base_model = base_model.to('meta')
+        # Construct a "stateless" version of one of the models. It is "stateless" in
+        # the sense that the parameters are meta Tensors and do not have storage.
+        base_model = deepcopy(self.list_models[0])
+        base_model = base_model.to('meta')
         
-        # def fmodel(params, buffers, x):
-        #     return functional_call(base_model, (params, buffers), (x,))
+        def fmodel(params, buffers, x):
+            return functional_call(base_model, (params, buffers), (x,))
         
         return vmap(fmodel, in_dims=(0, 0, None))
     
@@ -229,17 +262,22 @@ class Ensemblexperiment(BaselineExperiment):
                 #     labels.unsqueeze(0).repeat(logits.shape[0], 1).reshape(-1)
                 #     )
                 
-                losses = [criterion(
-                    logits[i, ...],
+                loss = criterion(
+                    logits.mean(dim=0),
                     labels
-                    ) for i in range(self.config.num_ensembles)
-                ]
+                    )
+                
+                # losses = [criterion(
+                #     logits[i, ...],
+                #     labels
+                #     ) for i in range(self.config.num_ensembles)
+                # ]
 
                 
                 # Optimizer step
                 if train:
-                    [loss.backward() for loss in losses]
-                    # loss.backward()                                    
+                    # [loss.backward() for loss in losses]
+                    loss.backward()                                    
                     self.optimizer.step()
                     # [optimizer.ste p() for optimizer in self.optimizers]
                     self.scheduler.step()
@@ -253,7 +291,8 @@ class Ensemblexperiment(BaselineExperiment):
                 ) for i, metric_calculator in enumerate(self.metric_calculators)]
                 
                 # Log losses
-                self.log_losses(sum(losses)/len(losses), desc)
+                self.log_losses(loss, desc)
+                # self.log_losses(sum(losses)/len(losses), desc)
                 
                 # # Break if debug
                 # if self.config.debug and i > 1:
