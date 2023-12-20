@@ -135,7 +135,11 @@ class Ensemblexperiment(BaselineExperiment):
             logging.info(f"Resuming from epoch {state['epoch']}")
         else:
             state = None
-            
+        
+        # # Testing if loading when preemption works
+        # param_buffer = self._get_param_buffer_data()
+        # self._set_param_buffer_data(*param_buffer)
+        
         if state is not None:
             self._set_param_buffer_data(*state["param_buffer_data"])
             self.optimizer.load_state_dict(state["optimizer"])
@@ -182,16 +186,19 @@ class Ensemblexperiment(BaselineExperiment):
 
         # Iterate through the model's parameters and save their values
         for name, param in self.params.items():
-            param_data[name] = param.data
+            if model_idx is not None:
+                param_data[name] = param.data[model_idx, ...]
+            else:
+                param_data[name] = param.data
         
         buffer_data = {}
         
         # Iterate through the model's buffers and save their values
         for name, buffer in self.buffers.items():
-            buffer_data[name] = buffer.data
-
-        if model_idx is not None:
-            return param_data[model_idx, ...], buffer_data[model_idx, ...]
+            if model_idx is not None:
+                buffer_data[name] = buffer.data[model_idx, ...]
+            else:
+                buffer_data[name] = buffer.data
         
         return param_data, buffer_data
     
