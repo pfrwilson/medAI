@@ -32,16 +32,6 @@ import timm
 from copy import deepcopy
  
 
-def marginal_entropy(outputs):
-    '''Copied from https://github.com/zhangmarvin/memo/blob/main/cifar-10-exps/test_calls/test_adapt.py'''
-    logits = outputs - outputs.logsumexp(dim=-1, keepdim=True)
-    avg_logits = logits.logsumexp(dim=0) - np.log(logits.shape[0])
-    min_real = torch.finfo(avg_logits.dtype).min
-    avg_logits = torch.clamp(avg_logits, min=min_real)
-    return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1), avg_logits
-batched_marginal_entropy = vmap(marginal_entropy)
-
-
 @dataclass
 class SARConfig:
     steps: int = 1
