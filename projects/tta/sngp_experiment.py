@@ -38,7 +38,6 @@ from medAI.datasets.nct2013 import (
 )
 
 
-
 @dataclass
 class SNGPConfig(BaselineConfig):
     """Configuration for the experiment."""
@@ -49,8 +48,6 @@ class SNGPConfig(BaselineConfig):
     
     epochs: int = 50
     batch_size: int = 32
-    batch_size_test: int = 32
-    shffl_test: bool = False
 
     instance_norm: bool = False
     min_involvement_train: int = 40.
