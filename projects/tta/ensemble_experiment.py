@@ -128,7 +128,7 @@ class Ensemblexperiment(BaselineExperiment):
         logging.info(f"""Trainable parameters: 
                      {self.config.num_ensembles*sum(p.numel() for p in self.list_models[0].parameters() if p.requires_grad)}""")
 
-    def save_states(self, model_idx=None, save_model=False):
+    def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
                 # "param_buffer_data": self._get_param_buffer_data() if save_model else None,
@@ -144,14 +144,14 @@ class Ensemblexperiment(BaselineExperiment):
                 "experiment.ckpt",
             )
         )
-        if model_idx is not None:
+        if best_model:
             torch.save(
                 {   
-                    f"model_{model_idx}": self.list_models[model_idx].state_dict(),
+                    f"list_models": [model.state_dict() for model in self.list_models],
                 },
                 os.path.join(
                     self.ckpt_dir,
-                    f"best_model_{model_idx}.ckpt",
+                    f"best_model.ckpt",
                 )
             )
 
@@ -175,16 +175,15 @@ class Ensemblexperiment(BaselineExperiment):
                 # Forward pass
                 logits = torch.stack([model(images) for model in self.list_models])
                 
-                probs = F.softmax(logits, dim=-1)
-                
-                loss = F.cross_entropy(
-                    probs.mean(dim=0),
+                losses = [nn.CrossEntropyLoss()(
+                    logits[i, ...],
                     labels
-                    )
+                    ) for i in range(self.config.num_ensembles)
+                ]
 
                 # Optimizer step
                 if train:                   
-                    loss.backward()                                    
+                    sum(losses).backward()
                     self.optimizer.step()
                     self.scheduler.step()
                     wandb.log({"lr": self.scheduler.get_last_lr()[0]})
@@ -192,12 +191,12 @@ class Ensemblexperiment(BaselineExperiment):
                 # Update metrics   
                 self.metric_calculator.update(
                     batch_meta_data = meta_data,
-                    probs = probs.mean(dim=0).detach().cpu(), # Take mean over ensembles
+                    probs = F.softmax(logits, dim=-1).mean(dim=0).detach().cpu(), # Take mean over ensembles
                     labels = labels.detach().cpu(),
                 )
                 
                 # Log losses
-                self.log_losses(loss, desc)
+                self.log_losses(sum(losses)/len(losses), desc)
                 
                 # # Break if debug
                 # if self.config.debug and i > 1:
