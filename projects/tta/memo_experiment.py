@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.func import vmap
 import typing as tp
 import numpy as np
@@ -205,7 +206,7 @@ class MEMOExperiment(BaselineExperiment):
             # Update metrics   
             self.metric_calculator.update(
                 batch_meta_data = meta_data,
-                logits = logits.detach().cpu(),
+                probs = F.softmax(logits, dim=-1).detach().cpu(),
                 labels = labels.detach().cpu(),
             )
             

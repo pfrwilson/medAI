@@ -23,8 +23,8 @@ class MetricCalculator(object):
         accuracy,
     ]
     
-    def __init__(self, high_inv_thresh = 40.0, include_all_inv = True, avg_core_logits_first: bool = False):
-        self.avg_core_logits_first = avg_core_logits_first
+    def __init__(self, high_inv_thresh = 40.0, include_all_inv = True, avg_core_probs_first: bool = False):
+        self.avg_core_probs_first = avg_core_probs_first
         self.high_inv_thresh = high_inv_thresh
         self.include_all_inv = include_all_inv
         self.best_score_updated = False
@@ -32,11 +32,11 @@ class MetricCalculator(object):
         self.reset()
 
     def reset(self):
-        self.core_id_logits = {}
+        self.core_id_probs = {}
         self.core_id_labels = {}
         self.core_id_invs = {}
 
-    def update(self, batch_meta_data, logits, labels):
+    def update(self, batch_meta_data, probs, labels):
         invs = deepcopy(batch_meta_data["pct_cancer"])
         ids = deepcopy(batch_meta_data["id"])
         for i, id_tensor in enumerate(ids):
@@ -45,12 +45,12 @@ class MetricCalculator(object):
             # Dict of invs
             self.core_id_invs[id] = invs[i]
             
-            # Dict of logits and labels
-            if id in self.core_id_logits:
-                self.core_id_logits[id].append(logits[i])
+            # Dict of probs and labels
+            if id in self.core_id_probs:
+                self.core_id_probs[id].append(probs[i])
                 self.core_id_labels[id].append(labels[i])
             else:
-                self.core_id_logits[id] = [logits[i]]
+                self.core_id_probs[id] = [probs[i]]
                 self.core_id_labels[id] = [labels[i]]
 
     def remove_low_inv_ids(self, core_id_invs):
@@ -74,54 +74,54 @@ class MetricCalculator(object):
     
     def get_patch_metrics(self, core_ids = None):
         if core_ids is None:
-            ids = self.core_id_logits.keys()
+            ids = self.core_id_probs.keys()
         else:
             ids = core_ids
             
-        logits = torch.cat(
-            [torch.stack(logits_list) for id, logits_list in self.core_id_logits.items() if id in ids]
+        probs = torch.cat(
+            [torch.stack(probs_list) for id, probs_list in self.core_id_probs.items() if id in ids]
             )
         labels = torch.cat(
             [torch.tensor(labels_list) for id, labels_list in self.core_id_labels.items() if id in ids]
             )
         return self._get_metrics(
-            logits, 
+            probs, 
             labels, 
             prefix="all_inv_patch_" if core_ids is None else "patch_"
             )
     
     def get_core_metrics(self, core_ids = None):
         if core_ids is None:
-            ids = self.core_id_logits.keys()
+            ids = self.core_id_probs.keys()
         else:
             ids = core_ids
         
-        if self.avg_core_logits_first:
-            logits = torch.cat(
-                [torch.stack(logits_list).mean(dim=0) for id, logits_list in self.core_id_logits.items() if id in ids])          
+        if self.avg_core_probs_first:
+            probs = torch.cat(
+                [torch.stack(probs_list).mean(dim=0) for id, probs_list in self.core_id_probs.items() if id in ids])          
         else:
-            logits = torch.stack(
-                [torch.stack(logits_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
-                for id, logits_list in self.core_id_logits.items() if id in ids])
-            logits = torch.cat([(1 - logits).unsqueeze(1), logits.unsqueeze(1)], dim=1)
+            probs = torch.stack(
+                [torch.stack(probs_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
+                for id, probs_list in self.core_id_probs.items() if id in ids])
+            probs = torch.cat([(1 - probs).unsqueeze(1), probs.unsqueeze(1)], dim=1)
 
         labels = torch.stack(
             [labels_list[0] for id, labels_list in self.core_id_labels.items() if id in ids])
         
         return self._get_metrics(
-            logits, 
+            probs, 
             labels, 
             prefix="all_inv_core_" if core_ids is None else "core_"
             )
             
-    def _get_metrics(self, logits, labels, prefix=""):
+    def _get_metrics(self, probs, labels, prefix=""):
         metrics: Dict = {}
         for metric in self.list_of_metrics:
             metric_name: str = metric.__name__
             try:
-                metric_value: float = metric(logits, labels, task="multiclass", num_classes=2)
+                metric_value: float = metric(probs, labels, task="multiclass", num_classes=2)
             except:
-                metric_value: float = metric(logits, labels, task="binary")
+                metric_value: float = metric(probs, labels, task="binary")
             metrics[prefix + metric_name] = metric_value
         return metrics
 
@@ -154,19 +154,19 @@ class MetricCalculator(object):
         return self._get_best_score_dict()
     
     def update_best_score(self, metrics, desc):
-        """This function assumes test is after val and it should receive metrics from val first
-        Also, it should receive metrics to calculate the best score"""
-        self.best_score_updated = False
-            
+        """This function assumes test is after val"""           
         if desc == "val" and metrics["core_auroc"] >= self.best_val_score:
                 self.best_val_score = metrics["core_auroc"]
                 self.best_val_patch_score = metrics["patch_auroc"]
                 self.best_all_inv_val_score = metrics["all_inv_core_auroc"]
                 self.best_score_updated = True
+        elif desc == "val":
+            self.best_score_updated = False
             
-        if desc == "test":
+        if desc == "test" and self.best_score_updated:
             self.best_test_score = metrics["core_auroc"]
             self.best_test_patch_score = metrics["patch_auroc"]
             self.best_all_inv_test_score = metrics["all_inv_core_auroc"]
+            self.best_score_updated = False
                 
         return self.best_score_updated, self._get_best_score_dict()

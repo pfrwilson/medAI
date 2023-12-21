@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import typing as tp
 import numpy as np
 import torch.optim as optim
@@ -210,7 +211,7 @@ class TTTExperiment(BaselineExperiment):
             # Update metrics   
             self.metric_calculator.update(
                 batch_meta_data = meta_data,
-                logits = logits.detach().cpu(),
+                probs = F.softmax(logits, dim=-1).detach().cpu(),
                 labels = labels.detach().cpu(),
             )
             

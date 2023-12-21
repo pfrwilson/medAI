@@ -5,6 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import typing as tp
 import numpy as np
 import torch.optim as optim
@@ -160,7 +161,6 @@ class BaselineExperiment(BasicExperiment):
         
         # Setup epoch and best score
         self.epoch = 0 
-        self.best_score = self.metric_calculator._get_best_score_dict()
         
         # Load checkpoint if exists
         if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
@@ -176,6 +176,9 @@ class BaselineExperiment(BasicExperiment):
             self.epoch = state["epoch"]
             self.metric_calculator.initialize_best_score(state["best_score"])
             self.save_states(save_model=False) # Free up model space
+            
+        # Initialize best score if not resuming
+        self.best_score = self.metric_calculator._get_best_score_dict()
             
 
         logging.info(f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
@@ -368,7 +371,7 @@ class BaselineExperiment(BasicExperiment):
                 # Update metrics   
                 self.metric_calculator.update(
                     batch_meta_data = meta_data,
-                    logits = logits.detach().cpu(),
+                    probs = F.softmax(logits, dim=-1).detach().cpu(),
                     labels = labels.detach().cpu(),
                 )
                 

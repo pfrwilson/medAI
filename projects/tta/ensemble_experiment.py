@@ -5,7 +5,7 @@ load_dotenv()
 
 import torch
 import torch.nn as nn
-from torch.func import vmap
+import torch.nn.functional as F
 import typing as tp
 import numpy as np
 import torch.optim as optim
@@ -69,43 +69,22 @@ class EnsembleConfig(BaselineConfig):
 class Ensemblexperiment(BaselineExperiment): 
     config_class = EnsembleConfig
     config: EnsembleConfig
-    
-    def __init__(self, config: EnsembleConfig):
-        super(Ensemblexperiment, self).__init__(config)
-    
-    def __call__(self):
-        self.setup()
-        for self.epoch in range(self.epoch, self.config.epochs):
-            print(f"Epoch {self.epoch}")
-            self.run_epoch(self.train_loader, train=True, desc="train")
-            self.run_epoch(self.val_loader, train=False, desc="val")
-            
-            # Run test and save states if best score updated
-            if any(self.list_best_score_updated):
-                self.run_epoch(self.test_loader, train=False, desc="test")
-                for i, if_updated in enumerate(self.list_best_score_updated):
-                    if if_updated:
-                        self.save_states(model_idx=i)
 
     def setup(self):
         # logging setup
         super(BaselineExperiment, self).setup()
         self.setup_data()
-        self.metric_calculators = [
-            MetricCalculator() for _ in range(self.config.num_ensembles)
-        ]
+        self.setup_metrics()
         
         logging.info('Setting up model, optimizer, scheduler')
         self.list_models = self.setup_model()
-        self.model = self.setup_vmap_model()
         
-        # params = []
-        # for model in self.list_models:
-        #     params.extend(model.parameters())
-        # self.optimizer = create_optimizer(self.config.optimizer_config, params)
+        params = []
+        for model in self.list_models:
+            params.append({'params': model.parameters()})
         
         self.optimizer = optim.Adam(
-            self.params.values(),
+            params,
             lr=self.config.optimizer_config.lr,
             weight_decay=self.config.optimizer_config.weight_decay
             )
@@ -116,18 +95,8 @@ class Ensemblexperiment(BaselineExperiment):
             max_epochs=self.config.epochs * len(self.train_loader),
         )
                 
-        # self.optimizers = [optim.Adam(
-        #     self.params[i],
-        #     lr=self.config.optimizer_config.lr,
-        #     weight_decay=self.config.optimizer_config.weight_decay
-        #     ) for i, model in enumerate(self.list_models)
-        # ]
-        
         # Setup epoch and best score
         self.epoch = 0 
-        self.list_best_score = [metric_calculator._get_best_score_dict()\
-            for metric_calculator in self.metric_calculators]
-        self.list_best_score_updated = [False for _ in range(self.config.num_ensembles)]
         
         # Load checkpoint if exists
         if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
@@ -141,14 +110,18 @@ class Ensemblexperiment(BaselineExperiment):
         # self._set_param_buffer_data(*param_buffer)
         
         if state is not None:
-            self._set_param_buffer_data(*state["param_buffer_data"])
+            # self._set_param_buffer_data(*state["param_buffer_data"])
+            [model.load_state_dict(state["list_models"][i])\
+                for i, model in enumerate(self.list_models)]
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
-            [metric_calculator.initialize_best_score(state["list_best_score"][i])\
-                for i, metric_calculator in enumerate(self.metric_calculators)]
+            self.metric_calculator.initialize_best_score(state["best_score"])
             self.save_states(save_model=False) # Free up model space
-            
+        
+        # Initialize best score
+        self.best_score = self.metric_calculator._get_best_score_dict()
+        self.best_score_updated = False
 
         logging.info(f"""Number of parameters: 
                      {self.config.num_ensembles*sum(p.numel() for p in self.list_models[0].parameters())}""")
@@ -158,11 +131,13 @@ class Ensemblexperiment(BaselineExperiment):
     def save_states(self, model_idx=None, save_model=False):
         torch.save(
             {   
-                "param_buffer_data": self._get_param_buffer_data() if save_model else None,
+                # "param_buffer_data": self._get_param_buffer_data() if save_model else None,
+                "list_models": [model.state_dict() for model in self.list_models]\
+                    if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
-                "list_best_score": self.list_best_score,
+                "best_score": self.best_score,
             },
             os.path.join(
                 self.ckpt_dir,
@@ -172,8 +147,7 @@ class Ensemblexperiment(BaselineExperiment):
         if model_idx is not None:
             torch.save(
                 {   
-                    f"param_buffer_{model_idx}": self._get_param_buffer_data(model_idx),
-                    f"best_score_{model_idx}": self.list_best_score[model_idx],
+                    f"model_{model_idx}": self.list_models[model_idx].state_dict(),
                 },
                 os.path.join(
                     self.ckpt_dir,
@@ -181,125 +155,49 @@ class Ensemblexperiment(BaselineExperiment):
                 )
             )
 
-    def _get_param_buffer_data(self, model_idx=None):
-        param_data = {}
-
-        # Iterate through the model's parameters and save their values
-        for name, param in self.params.items():
-            if model_idx is not None:
-                param_data[name] = param.data[model_idx, ...]
-            else:
-                param_data[name] = param.data
-        
-        buffer_data = {}
-        
-        # Iterate through the model's buffers and save their values
-        for name, buffer in self.buffers.items():
-            if model_idx is not None:
-                buffer_data[name] = buffer.data[model_idx, ...]
-            else:
-                buffer_data[name] = buffer.data
-        
-        return param_data, buffer_data
-    
-    def _set_param_buffer_data(self, param_data, buffer_data, model_idx=None):
-        # Iterate through the model's parameters and load their values
-        for item, data_item in zip(self.params.items(), param_data.items()):
-            name = item[0]
-            param = item[1]
-            if model_idx is not None:
-                param.data[model_idx, ...] = data_item[1].data
-            else:
-                param.data = data_item[1].data
-        
-        # Iterate through the model's buffers and load their values
-        for item, buffer_item in zip(self.buffers.items(), buffer_data.items()):
-            name = item[0]
-            buffer = item[1]
-            if model_idx is not None:
-                buffer.data[model_idx, ...] = buffer_item[1].data
-            else:
-                buffer.data = buffer_item[1].data
-    
     def setup_model(self):
         models = [super(Ensemblexperiment, self).setup_model() for _ in range(self.config.num_ensembles)]
         return models
-    
-    def setup_vmap_model(self):
-        from torch.func import stack_module_state
-        from torch.func import functional_call
-        # from functorch import combine_state_for_ensemble
-        
-        # Stack model state
-        self.params, self.buffers = stack_module_state(self.list_models)
-        # fmodel, self.params, self.buffers = combine_state_for_ensemble(self.list_models)
-        # [p.requires_grad_() for p in self.params]
 
-        # Construct a "stateless" version of one of the models. It is "stateless" in
-        # the sense that the parameters are meta Tensors and do not have storage.
-        base_model = deepcopy(self.list_models[0])
-        base_model = base_model.to('meta')
-        
-        def fmodel(params, buffers, x):
-            return functional_call(base_model, (params, buffers), (x,))
-        
-        return vmap(fmodel, in_dims=(0, 0, None))
-    
     def run_epoch(self, loader, train=True, desc="train"):
         with torch.no_grad() if not train else torch.enable_grad():
             [model.train() if train else model.eval() for model in self.list_models]
-            
-            criterion = nn.CrossEntropyLoss()
-            
+                        
             for i, batch in enumerate(tqdm(loader, desc=desc)):
                 images, labels, meta_data = batch
                 images = images.cuda()
                 labels = labels.cuda()
-                
-                batch_size = images.shape[0]
-                
+                               
                 # Zero gradients
                 if train:
                     self.optimizer.zero_grad()
                 
-                logits = self.model(self.params, self.buffers, images)
+                # Forward pass
+                logits = torch.stack([model(images) for model in self.list_models])
                 
-                # loss = criterion(
-                #     logits.reshape(self.config.num_ensembles*batch_size, -1),
-                #     labels.unsqueeze(0).repeat(logits.shape[0], 1).reshape(-1)
-                #     )
+                probs = F.softmax(logits, dim=-1)
                 
-                loss = criterion(
-                    logits.mean(dim=0),
+                loss = F.cross_entropy(
+                    probs.mean(dim=0),
                     labels
                     )
-                
-                # losses = [criterion(
-                #     logits[i, ...],
-                #     labels
-                #     ) for i in range(self.config.num_ensembles)
-                # ]
 
-                
                 # Optimizer step
-                if train:
-                    # [loss.backward() for loss in losses]
+                if train:                   
                     loss.backward()                                    
                     self.optimizer.step()
-                    # [optimizer.ste p() for optimizer in self.optimizers]
                     self.scheduler.step()
                     wandb.log({"lr": self.scheduler.get_last_lr()[0]})
                              
                 # Update metrics   
-                [metric_calculator.update(
+                self.metric_calculator.update(
                     batch_meta_data = meta_data,
-                    logits = logits[i, ...].detach().cpu(), # Take mean over ensembles
+                    probs = probs.mean(dim=0).detach().cpu(), # Take mean over ensembles
                     labels = labels.detach().cpu(),
-                ) for i, metric_calculator in enumerate(self.metric_calculators)]
+                )
                 
                 # Log losses
                 self.log_losses(loss, desc)
-                # self.log_losses(sum(losses)/len(losses), desc)
                 
                 # # Break if debug
                 # if self.config.debug and i > 1:
@@ -308,38 +206,6 @@ class Ensemblexperiment(BaselineExperiment):
             # Log metrics every epoch
             self.log_metrics(desc)
 
-    def log_metrics(self, desc):
-        # Get list of metrics for each model
-        list_metrics = [metric_calculator.get_metrics() \
-            for metric_calculator in self.metric_calculators]
-        
-        # Reset metrics for each model after each epoch
-        [metric_calculator.reset() for metric_calculator in self.metric_calculators]
-        
-        # Update best scores and get best scores for each model
-        for i, metrics in enumerate(list_metrics):
-            best_score_updated, best_score = self.metric_calculators[i].update_best_score(metrics, desc)
-            if (desc=='val' and best_score_updated) or (desc=='test' and self.list_best_score_updated[i]):
-                self.list_best_score[i] = copy(best_score)
-            if desc=='val':
-                self.list_best_score_updated[i] = copy(best_score_updated)
-
-        average_best_scores_dict = {}
-        for key in self.list_best_score[0].keys():
-            average_best_scores_dict[key] = sum([best_score[key] for best_score in self.list_best_score])/self.config.num_ensembles
-
-        # Log metrics
-        average_metrics_dict = {}
-        for key in list_metrics[0].keys():
-            average_metrics_dict[f"{desc}/{key}"] = sum([metrics[key] for metrics in list_metrics])/self.config.num_ensembles
-            
-        average_metrics_dict.update({"epoch": self.epoch})
-        average_metrics_dict.update(average_best_scores_dict) if desc == "val" else None 
-        wandb.log(
-            average_metrics_dict,
-            commit=True
-            )
-    
 
 if __name__ == '__main__': 
     Ensemblexperiment.submit()
