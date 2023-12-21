@@ -42,9 +42,9 @@ from medAI.datasets.nct2013 import (
 class SNGPConfig(BaselineConfig):
     """Configuration for the experiment."""
     name: str = "sngp_test2"
-    resume: bool = False
-    debug: bool = True
-    use_wandb: bool = False
+    resume: bool = True
+    debug: bool = False
+    use_wandb: bool = True
     
     epochs: int = 50
     batch_size: int = 32

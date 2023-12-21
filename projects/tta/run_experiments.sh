@@ -22,7 +22,7 @@
 INSTANCE_NORM=True
 GROUP="sngp_inst-nrm_loco"
 
-for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
+for CENTER in "UVA" "CRCEO" "JH" "PCC" "PMCC" 
 do
     python sngp_experiment.py \
         --name "${GROUP}_${CENTER}" \
