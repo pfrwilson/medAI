@@ -42,10 +42,10 @@ from medAI.datasets.nct2013 import (
 @dataclass
 class SNGPConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = "sngp"
-    resume: bool = True
-    debug: bool = False
-    use_wandb: bool = True
+    name: str = "sngp_test2"
+    resume: bool = False
+    debug: bool = True
+    use_wandb: bool = False
     
     epochs: int = 50
     batch_size: int = 32
@@ -79,7 +79,7 @@ class SNGPExperiment(BaselineExperiment):
         num_gp_features=128
         mean_field_factor=25
         
-        spectral_resnet = spectral_resnet10()
+        spectral_resnet = spectral_resnet10(in_channels=1, num_classes=2)
         spectral_resnet_fe = spectral_resnet_feature_extractor(spectral_resnet)
         
         sngp_model = Laplace(
@@ -87,9 +87,10 @@ class SNGPExperiment(BaselineExperiment):
             num_deep_features=num_deep_features,
             num_gp_features=num_gp_features,
             mean_field_factor=mean_field_factor,
-            num_data=len(self.train_dataset),
+            num_data=len(self.train_loader.dataset),
         )
         
+        sngp_model = sngp_model.cuda()
         return sngp_model
 
     def run_epoch(self, loader, train=True, desc="train"):
@@ -97,6 +98,10 @@ class SNGPExperiment(BaselineExperiment):
             self.model.train() if train else self.model.eval()
             
             criterion = nn.CrossEntropyLoss()
+            
+            # Reset precision matrix for SNGP
+            if train:
+                self.model.reset_precision_matrix()
             
             for i, batch in enumerate(tqdm(loader, desc=desc)):
                 images, labels, meta_data = batch
