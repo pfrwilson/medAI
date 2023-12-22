@@ -175,6 +175,7 @@ class BaselineExperiment(BasicExperiment):
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
             self.metric_calculator.initialize_best_score(state["best_score"])
+            self.best_score = state["best_score"]
             self.save_states(save_model=False) # Free up model space
             
         # Initialize best score if not resuming
