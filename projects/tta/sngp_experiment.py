@@ -76,8 +76,8 @@ class SNGPExperiment(BaselineExperiment):
         num_gp_features=128
         mean_field_factor=25
         
-        spectral_resnet = spectral_resnet10(in_channels=1, num_classes=2)
-        spectral_resnet_fe = spectral_resnet_feature_extractor(spectral_resnet)
+        spectral_resnet_fe = spectral_resnet10(in_channels=1, num_classes=2)
+        spectral_resnet_fe = spectral_resnet_fe.fc = torch.nn.Identity()
         
         sngp_model = Laplace(
             spectral_resnet_fe,
@@ -85,6 +85,7 @@ class SNGPExperiment(BaselineExperiment):
             num_gp_features=num_gp_features,
             mean_field_factor=mean_field_factor,
             num_data=len(self.train_loader.dataset),
+            train_batch_size=self.config.batch_size,
         )
         
         sngp_model = sngp_model.cuda()

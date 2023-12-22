@@ -1,36 +1,38 @@
-# ensemble experiment
-NUM_ENSEMBLES=10
-INSTANCE_NORM=True
-USE_BATCH_NORM=True
-GROUP="ensemble_bn_${NUM_ENSEMBLES}mdls_inst-nrm_loco"
-
-for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
-do
-    python ensemble_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
-        --num_ensembles $NUM_ENSEMBLES \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM        
-done 
-
-
-# # sngp experiment
+# # ensemble experiment
+# NUM_ENSEMBLES=10
 # INSTANCE_NORM=True
-# GROUP="sngp_inst-nrm_loco"
+# USE_BATCH_NORM=True
+# GROUP="ensemble_bn_${NUM_ENSEMBLES}mdls_inst-nrm_loco"
 
-# for CENTER in "UVA" "CRCEO" "JH" "PCC" "PMCC" 
+# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
 # do
-#     python sngp_experiment.py \
+#     python ensemble_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
 #         --group "${GROUP}" \
 #         --cluster "slurm" \
 #         --slurm_gres "gpu:a40:1" \
+#         --num_ensembles $NUM_ENSEMBLES \
 #         --cohort_selection_config "loco" \
 #         --leave_out $CENTER \
-#         --instance_norm $INSTANCE_NORM                
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM        
 # done 
+
+
+# sngp experiment
+INSTANCE_NORM=True
+GROUP="sngp_inst-nrm_loco"
+
+for CENTER in "UVA" "CRCEO" "JH" "PCC" "PMCC" 
+do
+    python sngp_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
+        --cluster "slurm" \
+        --slurm_gres "gpu:a40:1" \
+        --lr 0.001 \
+        --weight_decay 0.0001 \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --instance_norm $INSTANCE_NORM                
+done 
