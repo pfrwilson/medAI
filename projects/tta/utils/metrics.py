@@ -1,6 +1,6 @@
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from typing import Dict, List, Tuple
-# import numpy as np
+import numpy as np
 import torch
 import torchmetrics
 from copy import deepcopy
@@ -170,3 +170,50 @@ class MetricCalculator(object):
             self.best_score_updated = False
                 
         return self.best_score_updated, self._get_best_score_dict()
+
+
+def brier_score(probs, targets, weighted=True):
+    brier = (probs - targets) ** 2
+    ind_pos = targets == 1
+    ind_neg = targets == 0
+
+    if weighted:
+        brier[ind_pos] *= ind_neg.sum() / ind_pos.sum()
+
+    return np.mean(brier)
+
+
+def expected_calibration_error(preds, confidence, targets, n_bins=10):
+    # make everything numpy
+    preds = np.array(preds)
+    confidence = np.array(confidence)
+    targets = np.array(targets)
+
+    # make sure confidence is between 0 and 1
+    assert np.all(confidence >= 0) and np.all(
+        confidence <= 1
+    ), "confidence must be between 0 and 1"
+
+    bins = np.linspace(0, 1, n_bins + 1)
+    indices = np.digitize(confidence, bins)
+
+    acc_by_bin = np.zeros(n_bins)
+    n_by_bin = np.zeros(n_bins)
+    conf_by_bin = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        bin_indices = indices == i
+        if np.sum(bin_indices) == 0:
+            continue
+        acc_by_bin[i] = np.mean(preds[bin_indices] == targets[bin_indices])
+        n_by_bin[i] = len(preds[bin_indices])
+        conf_by_bin[i] = np.mean(confidence[bin_indices])
+
+    ece = np.sum(np.abs(acc_by_bin - conf_by_bin) * n_by_bin) / np.sum(n_by_bin)
+
+    return ece, {
+        "acc_by_bin": acc_by_bin,
+        "conf_by_bin": conf_by_bin,
+        "n_by_bin": n_by_bin,
+        "bins": bins,
+    }
