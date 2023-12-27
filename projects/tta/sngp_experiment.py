@@ -77,7 +77,7 @@ class SNGPExperiment(BaselineExperiment):
         mean_field_factor=25
         
         spectral_resnet_fe = spectral_resnet10(in_channels=1, num_classes=2)
-        spectral_resnet_fe = spectral_resnet_fe.fc = torch.nn.Identity()
+        spectral_resnet_fe.fc = torch.nn.Identity()
         
         sngp_model = Laplace(
             spectral_resnet_fe,

@@ -22,17 +22,19 @@
 # sngp experiment
 INSTANCE_NORM=True
 GROUP="sngp_inst-nrm_loco"
-
-for CENTER in "UVA" "CRCEO" "JH" "PCC" "PMCC" 
+LR=0.001
+WEIGHT_DECAY=0.0001
+for CENTER in "UVA" # "CRCEO" "JH" "PCC" "PMCC" 
 do
     python sngp_experiment.py \
-        --name "${GROUP}_${CENTER}" \
+        --name "${GROUP}_${CENTER}_32bz_lre-3" \
         --group "${GROUP}" \
         --cluster "slurm" \
         --slurm_gres "gpu:a40:1" \
-        --lr 0.001 \
-        --weight_decay 0.0001 \
+        --lr $LR \
+        --weight_decay $WEIGHT_DECAY \
         --cohort_selection_config "loco" \
         --leave_out $CENTER \
+        --batch_size 32 \
         --instance_norm $INSTANCE_NORM                
 done 
