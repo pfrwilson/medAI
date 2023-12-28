@@ -158,6 +158,7 @@ class Ensemblexperiment(BaselineExperiment):
 
     def setup_model(self):
         models = [super(Ensemblexperiment, self).setup_model() for _ in range(self.config.num_ensembles)]
+        models = [model.cuda() for model in models]
         return models
 
     def run_epoch(self, loader, train=True, desc="train"):

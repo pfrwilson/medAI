@@ -179,6 +179,7 @@ class TTTExperiment(BaselineExperiment):
         
     def setup_model(self):
         model = TTTModel(self.config.model_config)
+        model = model.cuda()
         return model
     
     def run_epoch(self, loader, train=True, desc="train"):
