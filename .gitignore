@@ -166,4 +166,5 @@ cython_debug/
 *.code-workspace
 pyrightconfig.json
 *.pth
+launch.json
 ```
