@@ -43,29 +43,34 @@
 # baseline experiment
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="baseline_gn_loco"
+# GROUP="baseline_gn_loco"
+GROUP="sam_baseline_gn_e-4rho_loco"
 # GROUP="baseline_bn_inst-nrm_loco"
 
-for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
+for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
 do
     python baseline_experiment.py \
         --name "${GROUP}_${CENTER}" \
         --group "${GROUP}" \
         --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
+        --slurm_gres "gpu:rtx6000:1" \
         --cohort_selection_config "loco" \
         --leave_out $CENTER \
         --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM        
-done 
+        --use_batch_norm $USE_BATCH_NORM \
+        --optimizer_config "sam" \
+        --rho 0.0001\
+        --lr 0.0001
+done
+
 
 
 # # ttt experiment
-# QUERY_PATCH=False
-# SUPPORT_PATCHES=2
-# GROUP="ttt_${SUPPORT_PATCHES}+0sprt_e-3adptlr_loco"
+# QUERY_PATCH=True
+# SUPPORT_PATCHES=0
+# GROUP="ttt_${SUPPORT_PATCHES}+1sprt_JT_0.1beta_loco"
 
-# for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
+# for CENTER in  "PMCC" "UVA" "CRCEO" #"JH" "PCC"
 # do
 #     python ttt_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -76,7 +81,30 @@ done
 #         --leave_out $CENTER \
 #         --include_query_patch $QUERY_PATCH \
 #         --num_support_patches $SUPPORT_PATCHES \
+#         --joint_training True \
 #         --adaptation_steps 1 \
-#         --adaptation_lr 0.001 \
-#         --beta_byol 0.3
+#         --adaptation_lr 0.0001 \
+#         --beta_byol 0.1
+# done 
+
+
+# # mt3 experiment
+# QUERY_PATCH=True
+# SUPPORT_PATCHES=0
+# GROUP="mt3_${SUPPORT_PATCHES}+1sprt_0.1beta_loco"
+
+# for CENTER in  "PMCC" "UVA" "CRCEO" # "JH" "PCC"  
+# do
+#     python mt3_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --include_query_patch $QUERY_PATCH \
+#         --num_support_patches $SUPPORT_PATCHES \
+#         --inner_steps 1 \
+#         --inner_lr 0.001 \
+#         --beta_byol 0.1
 # done 

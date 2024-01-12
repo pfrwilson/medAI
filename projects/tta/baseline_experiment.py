@@ -73,10 +73,10 @@ class OptimizerConfig:
     
 @dataclass
 class SAMOptimizerConfig:
-    optimizer = torch.optim.Adam
+    optimizer = torch.optim.SGD
     lr: float = 1e-4
     rho: float = 0.05
-    # momentum: float = 0.9
+    momentum: float = 0.9
 
 
 @dataclass
@@ -95,7 +95,7 @@ class BaselineConfig(BasicExperimentConfig):
     batch_size: int = 32
     
     instance_norm: bool = False
-    min_involvement_train: int = 40.
+    min_involvement_train: float = 40.
     benign_to_cancer_ratio_train: tp.Optional[float] = 1.0
     remove_benign_from_positive_patients_train: bool = True
     patch_config: PatchOptions = PatchOptions(
@@ -148,13 +148,13 @@ class BaselineExperiment(BasicExperiment):
                 self.config.optimizer_config.optimizer,
                 lr=self.config.optimizer_config.lr,
                 rho=self.config.optimizer_config.rho,
-                # momentum=self.config.optimizer_config.momentum,
+                momentum=self.config.optimizer_config.momentum,
             )
         else:
             self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
         
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
-            self.optimizer,
+            self.optimizer if not isinstance(self.optimizer, SAM) else self.optimizer.base_optimizer,
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
         )
@@ -282,6 +282,7 @@ class BaselineExperiment(BasicExperiment):
                 else self.config.fourier_transform_config.n_fourier_feats \
                         + 8*int(self.config.fourier_transform_config.include_original),
         
+        # Get normalization layer
         if self.config.model_config.use_batch_norm:
             norm_layer = nn.BatchNorm2d
         else:
