@@ -213,9 +213,9 @@ class MEMOExperiment(BaselineExperiment):
             # Log losses
             self.log_losses(loss, desc)
             
-            # Break if debug
-            if self.config.debug and i > 1:
-                break
+            # # Break if debug
+            # if self.config.debug and i > 1:
+            #     break
         
         # Log metrics every epoch
         self.log_metrics(desc)

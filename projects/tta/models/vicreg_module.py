@@ -11,6 +11,7 @@ class VICReg(nn.Module):
     def __init__(
         self,
         feature_extractor: nn.Module,
+        feature_dim: int,
         proj_output_dim: int = 512,
         proj_hidden_dim: int = 512,
         sim_loss_weight: float = 25.0,
@@ -31,7 +32,7 @@ class VICReg(nn.Module):
         super().__init__()
         
         self.feature_extractor = feature_extractor
-        self.feature_dim = feature_extractor.feature_info[-1]['num_chs']
+        self.feature_dim = feature_dim
         
         self.sim_loss_weight = sim_loss_weight
         self.var_loss_weight = var_loss_weight
@@ -57,8 +58,8 @@ class VICReg(nn.Module):
         Returns:
             Dict[str, Any]: a dict containing the outputs of the parent and the projected features.
         """
-        r1 = self.feature_extractor(X1)[-1]
-        r2 = self.feature_extractor(X2)[-1]
+        r1 = self.feature_extractor(X1)
+        r2 = self.feature_extractor(X2)
         
         z1 = self.projector(r1)
         z2 = self.projector(r2)

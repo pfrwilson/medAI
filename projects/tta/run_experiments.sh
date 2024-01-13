@@ -40,28 +40,28 @@
 # done 
 
 
-# baseline experiment
-INSTANCE_NORM=False
-USE_BATCH_NORM=False
-# GROUP="baseline_gn_loco"
-GROUP="sam_baseline_gn_e-4rho_loco"
-# GROUP="baseline_bn_inst-nrm_loco"
+# # baseline experiment
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# # GROUP="baseline_gn_loco"
+# GROUP="sam_baseline_gn_e-4rho_loco"
+# # GROUP="baseline_bn_inst-nrm_loco"
 
-for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
-do
-    python baseline_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:rtx6000:1" \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM \
-        --optimizer_config "sam" \
-        --rho 0.0001\
-        --lr 0.0001
-done
+# for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
+# do
+#     python baseline_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:rtx6000:1" \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --optimizer_config "sam" \
+#         --rho 0.0001\
+#         --lr 0.0001
+# done
 
 
 
@@ -108,3 +108,21 @@ done
 #         --inner_lr 0.001 \
 #         --beta_byol 0.1
 # done 
+
+
+# vicreg pretrain experiment
+INSTANCE_NORM=False
+USE_BATCH_NORM=False
+GROUP="vicreg_pretrn_linprob_gn_loco"
+for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO"
+do
+    python vicreg_pretrain_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
+        --cluster "slurm" \
+        --slurm_gres "gpu:rtx6000:1" \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --instance_norm $INSTANCE_NORM \
+        --use_batch_norm $USE_BATCH_NORM
+done
