@@ -26,7 +26,7 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import timm
 
-from copy import copy
+from copy import copy, deepcopy
 from simple_parsing import subgroups
 from utils.sam_optimizer import SAM
 
@@ -39,7 +39,7 @@ from medAI.datasets.nct2013 import (
 
 
 # Avoids too many open files error from multiprocessing
-torch.multiprocessing.set_sharing_strategy('file_system')
+# torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 @dataclass 
@@ -342,6 +342,7 @@ class BaselineExperiment(BasicExperiment):
             criterion = nn.CrossEntropyLoss()
             
             for i, batch in enumerate(tqdm(loader, desc=desc)):
+                batch = deepcopy(batch)
                 images, labels, meta_data = batch
                 images = images.cuda()
                 labels = labels.cuda()

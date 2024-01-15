@@ -166,6 +166,7 @@ class Ensemblexperiment(BaselineExperiment):
             [model.train() if train else model.eval() for model in self.list_models]
                         
             for i, batch in enumerate(tqdm(loader, desc=desc)):
+                batch = deepcopy(batch)
                 images, labels, meta_data = batch
                 images = images.cuda()
                 labels = labels.cuda()

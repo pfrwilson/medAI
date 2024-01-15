@@ -165,6 +165,7 @@ class MEMOExperiment(BaselineExperiment):
         criterion = nn.CrossEntropyLoss()
         
         for i, batch in enumerate(tqdm(loader, desc=desc)):
+            batch = deepcopy(batch)
             images_augs, images, labels, meta_data = batch
             images = images.cuda()
             labels = labels.cuda()

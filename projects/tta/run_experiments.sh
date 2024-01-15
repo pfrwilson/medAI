@@ -113,7 +113,7 @@
 # vicreg pretrain experiment
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="vicreg_pretrn_5e-3-20linprob_25cov_gn_loco"
+GROUP="vicreg_pretrn_5e-3-10linprob_100ep_gn_loco"
 # --group "${GROUP}" \
 for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO"
 do
@@ -125,16 +125,17 @@ do
         --leave_out $CENTER \
         --instance_norm $INSTANCE_NORM \
         --use_batch_norm $USE_BATCH_NORM \
-        --cov_coeff 25.0 \
+        --epochs 100 \
+        --cov_coeff 1.0 \
         --linear_lr 0.005 \
-        --linear_epochs 20
+        --linear_epochs 10
 done
 
 
 # # vicreg pretrain experiment
-# INSTANCE_NORM=True
+# INSTANCE_NORM=False
 # USE_BATCH_NORM=True
-# GROUP="vicreg_pretrn_5e-3-20linprob_inst-nrm_bn_f"
+# GROUP="vicreg_pretrn_5e-3-20linprob_bn_f"
 # # --group "${GROUP}" \
 # for FOLD in 0 # 1 2 3 4
 # do

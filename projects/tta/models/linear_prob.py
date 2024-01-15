@@ -13,11 +13,13 @@ class LinearProb:
         in_features,
         out_features,
         ssl_epoch=0,
-        metric_calculator=MetricCalculator()
+        metric_calculator=MetricCalculator(),
+        log_wandb=True
         ):
         self.linear = nn.Linear(in_features, out_features).cuda()
         self.metric_calculator = metric_calculator
         self.ssl_epoch = ssl_epoch
+        self.log_wandb = log_wandb
 
     def train(self, loader, epochs, lr=1e-3):
         optimizer = optim.Adam(self.linear.parameters(), lr=lr)
@@ -42,7 +44,8 @@ class LinearProb:
                 loss.backward()
                 optimizer.step()
             
-            self.log_losses(loss.item(), desc)
+            if self.log_wandb:
+                self.log_losses(loss.item(), desc)
                
             # Update metrics   
             self.metric_calculator.update(
@@ -52,9 +55,9 @@ class LinearProb:
             )
             
         # Log metrics
-        best_score_updated, best_score = self.log_metrics(desc)
-        
-        return best_score_updated, best_score
+        if self.log_wandb:
+            best_score_updated, best_score = self.log_metrics(desc)
+            return best_score_updated, best_score
     
     def log_losses(self, batch_loss_avg, desc):
         wandb.log(

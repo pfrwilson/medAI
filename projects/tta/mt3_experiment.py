@@ -193,6 +193,7 @@ class MT3Experiment(BaselineExperiment):
         
         
         for i, batch in enumerate(tqdm(loader, desc=desc)):
+            batch = deepcopy(batch)
             images_aug_1, images_aug_2, images, labels, meta_data = batch
             images_aug_1 = images_aug_1.cuda()
             images_aug_2 = images_aug_2.cuda()

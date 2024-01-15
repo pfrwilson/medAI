@@ -41,10 +41,7 @@ from models.vicreg_module import VICReg
 from models.ridge_regression import RidgeRegressor
 from timm.layers import create_classifier 
 from models.linear_prob import LinearProb
-
-# Avoids too many open files error from multiprocessing
-torch.multiprocessing.set_sharing_strategy('file_system')   
-
+ 
 
 @dataclass
 class VicregConfig:
@@ -56,8 +53,8 @@ class VicregConfig:
 
 @dataclass
 class LinearProbConfig:
-    linear_lr: float = 1e-3
-    linear_epochs: int = 10
+    linear_lr: float = 5e-3
+    linear_epochs: int = 15
     
 
 @dataclass
@@ -191,6 +188,7 @@ class VicregPretrainExperiment(BaselineExperiment):
         all_reprs_labels_metadata = []
         ssl_losses = []
         for i, batch in enumerate(tqdm(loader, desc=desc)):
+            batch = deepcopy(batch)
             images_augs, images, labels, meta_data = batch
             images_augs = images_augs.cuda()
             images = images.cuda()
