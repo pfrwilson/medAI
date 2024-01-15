@@ -168,3 +168,4 @@ pyrightconfig.json
 *.pth
 launch.json
 ```
+.vscode/settings.json
