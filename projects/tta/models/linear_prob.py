@@ -8,7 +8,13 @@ import wandb
 from copy import copy
 
 class LinearProb:
-    def __init__(self, in_features, out_features, ssl_epoch=0, metric_calculator=MetricCalculator()):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        ssl_epoch=0,
+        metric_calculator=MetricCalculator()
+        ):
         self.linear = nn.Linear(in_features, out_features).cuda()
         self.metric_calculator = metric_calculator
         self.ssl_epoch = ssl_epoch

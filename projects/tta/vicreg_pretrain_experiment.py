@@ -42,6 +42,9 @@ from models.ridge_regression import RidgeRegressor
 from timm.layers import create_classifier 
 from models.linear_prob import LinearProb
 
+# Avoids too many open files error from multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')   
+
 
 @dataclass
 class VicregConfig:
@@ -50,6 +53,11 @@ class VicregConfig:
     cov_coeff: float = 1.0
     proj_output_dim: int = 512
     proj_hidden_dim: int = 512    
+
+@dataclass
+class LinearProbConfig:
+    linear_lr: float = 1e-3
+    linear_epochs: int = 10
     
 
 @dataclass
@@ -62,6 +70,7 @@ class PretrainConfig(BaselineConfig):
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig(features_only=True)
     vicreg_config: VicregConfig = VicregConfig()
+    linear_prob_config: LinearProbConfig = LinearProbConfig()
 
 
 class VicregPretrainExperiment(BaselineExperiment): 
@@ -177,6 +186,7 @@ class VicregPretrainExperiment(BaselineExperiment):
     
     def run_epoch(self, loader, train=True, desc="train"):
         self.model.train() if train else self.model.eval()
+        self.vicreg_model.train() if train else self.vicreg_model.eval()
 
         all_reprs_labels_metadata = []
         ssl_losses = []
@@ -210,7 +220,11 @@ class VicregPretrainExperiment(BaselineExperiment):
                 ssl_epoch=self.epoch,
                 metric_calculator=self.metric_calculator
                 )
-            self.linear_prob.train(all_reprs_labels_metadata, epochs=10, lr=1e-3)
+            self.linear_prob.train(
+                all_reprs_labels_metadata,
+                epochs=self.config.linear_prob_config.linear_epochs,
+                lr=self.config.linear_prob_config.linear_lr
+                )
         else:
             self.best_score_updated, self.best_score = self.linear_prob.validate(all_reprs_labels_metadata, desc)
         

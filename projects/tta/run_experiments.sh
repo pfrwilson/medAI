@@ -113,16 +113,39 @@
 # vicreg pretrain experiment
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="vicreg_pretrn_linprob_gn_loco"
+GROUP="vicreg_pretrn_5e-3-20linprob_25cov_gn_loco"
+# --group "${GROUP}" \
 for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO"
 do
     python vicreg_pretrain_experiment.py \
         --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
         --cluster "slurm" \
-        --slurm_gres "gpu:rtx6000:1" \
+        --slurm_gres "gpu:a40:1" \
         --cohort_selection_config "loco" \
         --leave_out $CENTER \
         --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM
+        --use_batch_norm $USE_BATCH_NORM \
+        --cov_coeff 25.0 \
+        --linear_lr 0.005 \
+        --linear_epochs 20
 done
+
+
+# # vicreg pretrain experiment
+# INSTANCE_NORM=True
+# USE_BATCH_NORM=True
+# GROUP="vicreg_pretrn_5e-3-20linprob_inst-nrm_bn_f"
+# # --group "${GROUP}" \
+# for FOLD in 0 # 1 2 3 4
+# do
+#     python vicreg_pretrain_experiment.py \
+#         --name "${GROUP}_${FOLD}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --fold $FOLD \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --cov_coeff 1.0 \
+#         --linear_lr 0.005 \
+#         --linear_epochs 20
+# done
