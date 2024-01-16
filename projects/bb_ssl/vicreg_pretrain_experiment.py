@@ -22,7 +22,7 @@ from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 import torchvision
 import torchvision.transforms as transforms
 
-from timm.optim.optim_factory import create_optimizer
+from timm.optim.optim_factory import create_optimizer_v2
 
 from einops import rearrange, repeat
 from tqdm.auto import tqdm
@@ -135,7 +135,12 @@ class VicregPretrainExperiment(BasicExperiment):
         logging.info('Setting up model, optimizer, scheduler')
         self.model: nn.Module = self.setup_model()
         
-        self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
+        self.optimizer = create_optimizer_v2(
+            self.model,
+            opt=self.config.optimizer_config.opt,
+            lr=self.config.optimizer_config.lr,
+            weight_decay=self.config.optimizer_config.weight_decay,
+            )
         
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
