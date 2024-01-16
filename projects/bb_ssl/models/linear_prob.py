@@ -22,15 +22,23 @@ class LinearProb:
         self.best_val_score_updated = False
 
     def train(self, loader, epochs, lr=1e-3):
-        optimizer = optim.Adam(self.linear.parameters(), lr=lr, weight_decay=1e-6)
+        # # optimizer with lr sheduler
+        # lr_start, lr_end = 1e-2, 1e-6
+        # gamma = (lr_end / lr_start) ** (1 / epochs)
+        # optimizer = optim.Adam(self.linear.parameters(), lr=lr_start, weight_decay=5e-6)
+        # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+        
+        # optimizer = optim.Adam(self.linear.parameters(), lr=lr, weight_decay=1e-6)
+        
+        optimizer = optim.SGD(self.linear.parameters(), lr=lr, weight_decay=1e-6)
         
         for epoch in range(epochs):
-            self.run_epoch(loader, optimizer, 'train')
+            self.run_epoch(loader, optimizer, None, 'train')
     
     def validate(self, loader, desc='val'):
-        return self.run_epoch(loader, None, desc)
+        return self.run_epoch(loader, None, None, desc)
     
-    def run_epoch(self, loader, optimizer, desc):
+    def run_epoch(self, loader, optimizer, scheduler, desc):
         self.linear.train() if desc == 'train' else self.linear.eval()
         
         
@@ -47,6 +55,8 @@ class LinearProb:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                # scheduler.step()
+                
             
             if self.log_wandb:
                 self.log_losses(loss.item(), desc)

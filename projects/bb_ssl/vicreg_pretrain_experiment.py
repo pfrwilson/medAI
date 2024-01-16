@@ -38,7 +38,7 @@ from timm.layers import create_classifier
 from models.linear_prob import LinearProb
 
 
-ROOT = "/scratch/ssd002/datasets"
+DATAROOT = "/scratch/ssd002/datasets"
 
 
 @dataclass
@@ -189,11 +189,12 @@ class VicregPretrainExperiment(BasicExperiment):
                 #                       ])
                 selfT.transform = transforms.Compose([transforms.ToTensor(),
                                                       transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])])
-                selfT.aug_transform = transforms.Compose([transforms.ToTensor(),
+                selfT.aug_transform = transforms.Compose([
                                       transforms.RandomResizedCrop(size=32, antialias=True),
                                       transforms.RandomHorizontalFlip(p=0.5),
                                       transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
                                       transforms.RandomGrayscale(p=0.2),
+                                      transforms.ToTensor(),
                                       transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
                                     #   transforms.RandomApply([transforms.GaussianBlur(kernel_size=23)], p=0.5),
                                       ])
@@ -205,22 +206,22 @@ class VicregPretrainExperiment(BasicExperiment):
                     return selfT.aug_transform(img), selfT.aug_transform(img), selfT.transform(img)
 
         if self.config.data_config.dataset_name == "cifar10":
-            train_ds = torchvision.datasets.CIFAR10(root=ROOT+'/cifar10', train=True,
+            train_ds = torchvision.datasets.CIFAR10(root=DATAROOT+'/cifar10', train=True,
                                                     download=False, transform=Transform(augment=True))
-            test_ds = torchvision.datasets.CIFAR10(root=ROOT+'/cifar10', train=False,
+            test_ds = torchvision.datasets.CIFAR10(root=DATAROOT+'/cifar10', train=False,
                                                     download=False, transform=Transform(augment=False))
         
         elif self.config.data_config.dataset_name == "cifar100":
-            train_ds = torchvision.datasets.CIFAR100(root=ROOT+'/cifar100', train=True,
+            train_ds = torchvision.datasets.CIFAR100(root=DATAROOT+'/cifar100', train=True,
                                                     download=False, transform=Transform(augment=True))
-            test_ds = torchvision.datasets.CIFAR100(root=ROOT+'/cifar100', train=False,
+            test_ds = torchvision.datasets.CIFAR100(root=DATAROOT+'/cifar100', train=False,
                                                     download=False, transform=Transform(augment=False))
         
         else:
             raise NotImplementedError
         
         # Define the sizes of your splits
-        train_size = int(0.8 * len(train_ds))
+        train_size = int(self.config.data_config.train_ratio * len(train_ds))
         val_size = len(train_ds) - train_size
 
         # Split the dataset
@@ -395,6 +396,7 @@ class VicregPretrainExperiment(BasicExperiment):
     def checkpoint(self):
         self.save_states(save_model=True)
         return super().checkpoint()
+
 
 class TimmFeatureExtractorWrapper(nn.Module):
     def __init__(self, timm_model):
