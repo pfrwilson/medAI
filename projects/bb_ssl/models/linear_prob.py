@@ -22,7 +22,7 @@ class LinearProb:
         self.best_val_score_updated = False
 
     def train(self, loader, epochs, lr=1e-3):
-        optimizer = optim.Adam(self.linear.parameters(), lr=lr)
+        optimizer = optim.Adam(self.linear.parameters(), lr=lr, weight_decay=1e-6)
         
         for epoch in range(epochs):
             self.run_epoch(loader, optimizer, 'train')
@@ -79,9 +79,11 @@ class LinearProb:
         if desc=='val' and self.best_val_score <= accuracy:
             self.best_val_score_updated = True
             self.best_val_score = accuracy
-            metrics_dict.update({"best_score": self.best_val_score})
+            metrics_dict.update({f"{desc}/best_accuracy": self.best_val_score})
         elif desc=='val':
             self.best_val_score_updated = False
+        elif desc=='test':
+            metrics_dict.update({f"{desc}/best_accuracy": accuracy})
         
         wandb.log(
             metrics_dict,

@@ -45,7 +45,7 @@ ROOT = "/scratch/ssd002/datasets"
 class DataConfig:
     dataset_name: str = "cifar10"
     train_ratio: float = 0.8
-    split_seed: int = 42
+    split_seed: int = 0
 
 @dataclass
 class FeatureExtractorConfig:
@@ -54,7 +54,7 @@ class FeatureExtractorConfig:
     in_chans: int = 3
     features_only: bool = True # return features only, not logits
     num_groups: int = 8
-    use_batch_norm: bool = False
+    use_batch_norm: bool = True
     
     def __post_init__(self):
         valid_models = timm.list_models()
@@ -65,9 +65,9 @@ class FeatureExtractorConfig:
 @dataclass
 class OptimizerConfig:
     opt: str = 'adam'
-    lr: float = 1e-4
-    weight_decay: float = 0.0
-    momentum: float = 0.9
+    lr: float = 1e-2
+    weight_decay: float = 1e-6
+    # momentum: float = 0.9
 
 
 @dataclass
@@ -173,18 +173,28 @@ class VicregPretrainExperiment(BasicExperiment):
         class Transform:
             def __init__(selfT, augment=False):
                 selfT.augment = augment
-                selfT.transform = transforms.Compose([transforms.ToTensor()])
+                # selfT.transform = transforms.Compose([transforms.ToTensor()])
+                # selfT.aug_transform = transforms.Compose([transforms.ToTensor(),
+                #                       transforms.RandomResizedCrop(size=32, scale=(0.2, 1.0), antialias=True),
+                #                       transforms.RandomHorizontalFlip(p=0.5),
+                #                       transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)], p=0.8),
+                #                       transforms.RandomGrayscale(p=0.2),
+                #                       transforms.RandomApply([transforms.GaussianBlur(kernel_size=23)], p=0.5),
+                #                       ])
+                selfT.transform = transforms.Compose([transforms.ToTensor(),
+                                                      transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])])
                 selfT.aug_transform = transforms.Compose([transforms.ToTensor(),
-                                      transforms.RandomResizedCrop(size=32, scale=(0.08, 1.0)),
+                                      transforms.RandomResizedCrop(size=32, antialias=True),
                                       transforms.RandomHorizontalFlip(p=0.5),
-                                      transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)], p=0.8),
+                                      transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
                                       transforms.RandomGrayscale(p=0.2),
-                                      transforms.RandomApply([transforms.GaussianBlur(kernel_size=23)], p=0.5),
+                                      transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
+                                    #   transforms.RandomApply([transforms.GaussianBlur(kernel_size=23)], p=0.5),
                                       ])
             
             def __call__(selfT, img):
                 if not selfT.augment:
-                    return None, None, selfT.transform(img)
+                    return -1, -1, selfT.transform(img)
                 else:
                     return selfT.aug_transform(img), selfT.aug_transform(img), selfT.transform(img)
 
@@ -316,7 +326,12 @@ class VicregPretrainExperiment(BasicExperiment):
             labels = labels.cuda()
             
             # Forward
-            ssl_loss, ssl_loss_components, r1, r2 = self.vicreg_model(img_aug1, img_aug2)
+            if desc != "test":
+                ssl_loss, ssl_loss_components, r1, r2 = self.vicreg_model(img_aug1, img_aug2)
+            else:
+                ssl_loss, ssl_loss_components, r1, r2 = self.vicreg_model(img, img)
+                
+            # Log features and loss
             ssl_losses.append(ssl_loss.item())
             all_reprs_labels_metadata.append((r1.detach(), labels))            
             
