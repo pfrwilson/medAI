@@ -162,7 +162,8 @@ class VicregPretrainExperiment(BasicExperiment):
         self.best_score_updated = False
 
         if state is not None:
-            self.model.load_state_dict(state["model"])
+            self.vicreg_model.load_state_dict(state["vicreg_model"])
+            self.model = self.vicreg_model.feature_extractor # TODO: might not be necessary
             self.optimizer.load_state_dict(state["optimizer"])
             self.scheduler.load_state_dict(state["scheduler"])
             self.epoch = state["epoch"]
@@ -242,7 +243,7 @@ class VicregPretrainExperiment(BasicExperiment):
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
-                "model": self.model.state_dict() if save_model else None,
+                "vicreg_model": self.vicreg_model.state_dict() if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
@@ -391,6 +392,9 @@ class VicregPretrainExperiment(BasicExperiment):
             commit=False
             )
 
+    def checkpoint(self):
+        self.save_states(save_model=True)
+        return super().checkpoint()
 
 class TimmFeatureExtractorWrapper(nn.Module):
     def __init__(self, timm_model):
