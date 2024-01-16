@@ -1,5 +1,8 @@
 import torch 
 import logging
+import numpy as np
+import random
+import logging
 
 
 def view_as_windows_torch(image: torch.Tensor, window_size, step_size): 
@@ -26,17 +29,19 @@ def view_as_windows_torch(image: torch.Tensor, window_size, step_size):
 
 
 class EarlyStopping:
-    """Signals to stop the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=7, verbose=True, delta=0):
-        """
-        Args:
-            patience (int): How long to wait after last time validation loss improved.
-                            Default: 7
-            verbose (bool): If True, prints a message for each validation loss improvement. 
-                            Default: False
-            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
-                            Default: 0
-        """
+    """Signals to stop the training if validation score doesn't improve after a given patience. 
+    Args:
+        patience (int): How long to wait after last time the validation score increased
+        verbose (bool): If True, prints a message for each validation loss improvement. 
+                        Default: False
+        delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+                        Default: 0
+        mode (str): One of `min`, `max`. In `min` mode, training will stop when the quantity
+                    monitored has stopped decreasing; in `max` mode it will stop when the
+                    quantity monitored has stopped increasing. Default: `min`
+    """
+    def __init__(self, patience=7, verbose=True, delta=0, mode='min'):
+        
         self.patience = patience
         self.verbose = verbose
 
@@ -45,10 +50,15 @@ class EarlyStopping:
         self.early_stop = False
         self.improvement = False
         self.delta = delta
+        self.mode = mode 
 
     def __call__(self, score):
         if self.best_score is None:
             self.best_score = score
+
+        if self.mode == 'min': 
+            score = -score
+
         elif score < self.best_score + self.delta:
             if self.verbose:
                 logging.info(f'EarlyStopping - no improvement: {self.counter}/{self.patience}')
@@ -78,3 +88,16 @@ class EarlyStopping:
         self.best_score = state_dict['best_score']
         self.early_stop = state_dict['early_stop']
         self.improvement = state_dict['improvement']
+
+
+def set_seed(seed: int): 
+    """Sets the seed for all random number generators. 
+    Args: 
+        seed (int): The seed to set. 
+    """
+    logging.info(f'Setting seed to {seed}')
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True

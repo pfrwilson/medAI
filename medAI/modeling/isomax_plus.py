@@ -7,6 +7,7 @@ class IsoMaxPlusLossFirstPart(nn.Module):
     """This part replaces the model classifier output layer nn.Linear()"""
     def __init__(self, num_features, num_classes, temperature=1.0):
         super(IsoMaxPlusLossFirstPart, self).__init__()
+
         self.num_features = num_features
         self.num_classes = num_classes
         self.temperature = temperature        

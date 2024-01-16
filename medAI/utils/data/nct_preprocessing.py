@@ -1,3 +1,13 @@
+"""
+This file contains the preprocessing steps for the NCT dataset, 
+including the conversion from IQ data to RF data, and the
+stitching of focal zones.
+
+The preprocessing steps are based on the MATLAB code provided by
+Exact Imaging and adjusted by Amoon Jamzad.
+"""
+
+
 from math import floor
 import einops
 import numpy as np
@@ -7,7 +17,6 @@ import pandas as pd
 from itertools import product
 from skimage.transform import resize
 from scipy.signal import lfilter
-
 
 # ===================================================
 # DEFAULT PARAMETERS TAKEN FROM THE MATLAB SCRIPT
