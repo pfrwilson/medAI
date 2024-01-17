@@ -38,7 +38,7 @@ from medAI.datasets.nct2013 import (
 )
 
 
-# Avoids too many open files error from multiprocessing
+# # Avoids too many open files error from multiprocessing
 # torch.multiprocessing.set_sharing_strategy('file_system')
 
 

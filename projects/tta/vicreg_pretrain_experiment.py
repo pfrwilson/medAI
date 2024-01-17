@@ -6,7 +6,6 @@ load_dotenv()
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.func import vmap
 import typing as tp
 import numpy as np
 import torch.optim as optim
@@ -42,6 +41,9 @@ from models.ridge_regression import RidgeRegressor
 from timm.layers import create_classifier 
 from models.linear_prob import LinearProb
  
+ 
+# # Avoids too many open files error from multiprocessing
+# torch.multiprocessing.set_sharing_strategy('file_system')
 
 @dataclass
 class VicregConfig:
@@ -60,7 +62,7 @@ class LinearProbConfig:
 @dataclass
 class PretrainConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = " pretrain_test"
+    name: str = " pretrain_test_1"
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True
@@ -78,7 +80,52 @@ class VicregPretrainExperiment(BaselineExperiment):
         super().__init__(config)
         self.best_val_loss = np.inf
         self.best_score_updated = False
-    
+                
+    def setup(self):
+        # logging setup
+        super(BaselineExperiment, self).setup()
+        self.setup_data()
+        self.setup_metrics()
+
+        logging.info('Setting up model, optimizer, scheduler')
+        self.model = self.setup_model()
+        
+        self.optimizer = create_optimizer(self.config.optimizer_config, self.model)
+        
+        self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
+            self.optimizer,
+            warmup_epochs=5 * len(self.train_loader),
+            max_epochs=self.config.epochs * len(self.train_loader),
+        )
+        
+        # Setup epoch and best score
+        self.epoch = 0 
+        
+        # Load checkpoint if exists
+        if "experiment.ckpt" in os.listdir(self.ckpt_dir) and self.config.resume:
+            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
+            logging.info(f"Resuming from epoch {state['epoch']}")
+        else:
+            state = None
+            
+        if state is not None:
+            self.ssl_model.load_state_dict(state["ssl_model"])
+            self.model = self.ssl_model.feature_extractor
+            self.optimizer.load_state_dict(state["optimizer"])
+            self.scheduler.load_state_dict(state["scheduler"])
+            self.epoch = state["epoch"]
+            self.metric_calculator.initialize_best_score(state["best_score"])
+            self.best_score = state["best_score"]
+            self.save_states(save_model=False) # Free up model space
+            
+        # Initialize best score if not resuming
+        self.best_score = self.metric_calculator._get_best_score_dict()
+            
+
+        logging.info(f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
+        logging.info(f"""Trainable parameters: 
+                     {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}""")
+
     def setup_data(self):
         from torchvision.transforms import InterpolationMode
         from torchvision.transforms import v2 as T
@@ -145,13 +192,13 @@ class VicregPretrainExperiment(BaselineExperiment):
 
 
         self.train_loader = DataLoader(
-            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
+            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4 #, pin_memory=True
         )
         self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 #, pin_memory=True
         )
         self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 #, pin_memory=True
         )
 
     def setup_model(self):
@@ -168,7 +215,7 @@ class VicregPretrainExperiment(BaselineExperiment):
         
         self.model = nn.Sequential(TimmFeatureExtractorWrapper(model), global_pool)
         
-        self.vicreg_model = VICReg(
+        self.ssl_model = VICReg(
             self.model,
             feature_dim=512,
             proj_output_dim=self.config.vicreg_config.proj_output_dim,
@@ -177,13 +224,39 @@ class VicregPretrainExperiment(BaselineExperiment):
             var_loss_weight=self.config.vicreg_config.var_coeff,
             cov_loss_weight=self.config.vicreg_config.cov_coeff,
         )
-        self.vicreg_model = self.vicreg_model.cuda()
+        self.ssl_model = self.ssl_model.cuda()
         # note that model is still feature extractor which gets saved
         return self.model
-    
+      
+    def save_states(self, best_model=False, save_model=False):
+        torch.save(
+            {   
+                "ssl_model": self.ssl_model.state_dict() if save_model else None,
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": self.scheduler.state_dict(),
+                "epoch": self.epoch,
+                "best_score": self.best_score,
+            },
+            os.path.join(
+                self.ckpt_dir,
+                "experiment.ckpt",
+            )
+        )
+        if best_model:
+            torch.save(
+                {   
+                    "model": self.model.state_dict(),
+                    "best_score": self.best_score,
+                },
+                os.path.join(
+                    self.ckpt_dir,
+                    "best_model.ckpt",
+                )
+            )
+
     def run_epoch(self, loader, train=True, desc="train"):
         self.model.train() if train else self.model.eval()
-        self.vicreg_model.train() if train else self.vicreg_model.eval()
+        self.ssl_model.train() if train else self.ssl_model.eval()
 
         all_reprs_labels_metadata = []
         ssl_losses = []
@@ -195,7 +268,7 @@ class VicregPretrainExperiment(BaselineExperiment):
             labels = labels.cuda()
             
             # Forward
-            ssl_loss, ssl_loss_components, r1, r2 = self.vicreg_model(images_augs[:, 0], images_augs[:, 1])
+            ssl_loss, ssl_loss_components, r1, r2 = self.ssl_model(images_augs[:, 0], images_augs[:, 1])
             ssl_losses.append(ssl_loss.item())
             all_reprs_labels_metadata.append((r1.detach(),labels,meta_data))            
             
