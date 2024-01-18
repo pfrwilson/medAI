@@ -268,7 +268,11 @@ class VicregPretrainExperiment(BaselineExperiment):
             labels = labels.cuda()
             
             # Forward
-            ssl_loss, ssl_loss_components, r1, r2 = self.ssl_model(images_augs[:, 0], images_augs[:, 1])
+            if desc != "test":
+                ssl_loss, ssl_loss_components, r1, r2 = self.ssl_model(images_augs[:, 0], images_augs[:, 1])
+            else:
+                ssl_loss, ssl_loss_components, r1, r2 = self.ssl_model(images, images)
+            
             ssl_losses.append(ssl_loss.item())
             all_reprs_labels_metadata.append((r1.detach(),labels,meta_data))            
             

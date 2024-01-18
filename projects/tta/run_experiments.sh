@@ -113,12 +113,12 @@
 # vicreg pretrain experiment
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="vicreg_pretrn_5e-3-10linprob_100ep_gn_loco"
-# --group "${GROUP}" \
-for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO"
+GROUP="vicreg_pretrn_2048zdim_gn_loco"
+for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
 do
     python vicreg_pretrain_experiment.py \
         --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
         --cluster "slurm" \
         --slurm_gres "gpu:a40:1" \
         --cohort_selection_config "loco" \
@@ -126,9 +126,10 @@ do
         --instance_norm $INSTANCE_NORM \
         --use_batch_norm $USE_BATCH_NORM \
         --epochs 100 \
+        --proj_output_dim 2048 \
         --cov_coeff 1.0 \
         --linear_lr 0.005 \
-        --linear_epochs 10
+        --linear_epochs 15
 done
 
 

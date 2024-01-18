@@ -1,6 +1,7 @@
 # vicreg pretrain experiment
-# GROUP="vicreg_pretrn_1e-2lr_1e-2-15linprob_cifar10_newtrnsfrm_bn_1000ep"
-GROUP="vicreg_pretrn_test"
+USE_BATCH_NORM=True
+GROUP="vicreg_pretrn_1e-3lr_1e-2sgdlinprob_cifar10_newtrnsfrm_bn_1000ep_8192zdim"
+# GROUP="vicreg_pretrn_test2"
 # --group "${GROUP}" \
 for SPLIT_SEED in 0
 do
@@ -10,12 +11,12 @@ do
         --slurm_gres "gpu:a40:1" \
         --split_seed $SPLIT_SEED \
         --use_batch_norm $USE_BATCH_NORM \
-        --timeout_min 4 \
         --epochs 1000 \
-        --lr 0.01 \
+        --lr 0.001 \
+        --proj_output_dim 8192 \
         --cov_coeff 1.0 \
         --linear_lr 0.01 \
-        --linear_epochs 15 
+        --linear_epochs 15
 done
 
 
