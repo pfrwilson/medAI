@@ -39,7 +39,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["UVA", ]: #"JH", "PMCC",  "PCC"]:
+for LEAVE_OUT in ["CRCEO"]: #"PCC", "JH", "PMCC", "UVA",
 
     ## Data Finetuning
     ###### No support dataset ######
@@ -160,67 +160,82 @@ for LEAVE_OUT in ["UVA", ]: #"JH", "PMCC",  "PCC"]:
     model.cuda()
 
     a = True
-    ## Get train reprs
-    from models.linear_prob import LinearProb
+    
+    ## Fine-tune
+    from models.finetuner import Fineturner
 
-    loader = train_loader
-
-    desc = "train"
     metric_calculator = MetricCalculator()
-    # linear_prob = nn.Linear(512, 2).cuda()
-    # optimizer = optim.Adam(linear_prob.parameters(), lr=1e-4)
-    all_reprs_labels_metadata_train = []
-    all_reprs = []
-    all_labels = []
-    for i, batch in enumerate(tqdm(loader, desc=desc)):
-        batch = deepcopy(batch)
-        images_augs, images, labels, meta_data = batch
-        images_augs = images_augs.cuda()
-        images = images.cuda()
-        labels = labels.cuda()
+    finetuner_model: Fineturner = Fineturner(model, 512, 2, metric_calculator=metric_calculator, log_wandb=False)
+    finetuner_model.train(train_loader,
+                  epochs=5,
+                  train_backbone=True,
+                  lr=1e-3
+                  )
+    
+    
+    ## Get train reprs
+    # from models.linear_prob import LinearProb
+
+    # loader = train_loader
+
+    # desc = "train"
+    # metric_calculator = MetricCalculator()
+    # # linear_prob = nn.Linear(512, 2).cuda()
+    # # optimizer = optim.Adam(linear_prob.parameters(), lr=1e-4)
+    # all_reprs_labels_metadata_train = []
+    # all_reprs = []
+    # all_labels = []
+    # for i, batch in enumerate(tqdm(loader, desc=desc)):
+    #     batch = deepcopy(batch)
+    #     images_augs, images, labels, meta_data = batch
+    #     images_augs = images_augs.cuda()
+    #     images = images.cuda()
+    #     labels = labels.cuda()
         
-        reprs = model(images).detach()
-        all_reprs.append(reprs.cpu().numpy())
-        all_labels.append(labels.cpu().numpy())
-        all_reprs_labels_metadata_train.append((reprs, labels, meta_data))
+    #     reprs = model(images).detach()
+    #     all_reprs.append(reprs.cpu().numpy())
+    #     all_labels.append(labels.cpu().numpy())
+    #     all_reprs_labels_metadata_train.append((reprs, labels, meta_data))
 
-        # logits = linear_prob(reprs)
-        # loss = nn.CrossEntropyLoss()(logits, labels)
+    #     # logits = linear_prob(reprs)
+    #     # loss = nn.CrossEntropyLoss()(logits, labels)
         
-        # optimizer.zero_grad()
-        # loss.backward()
-        # optimizer.step()
-    all_reprs = np.concatenate(all_reprs, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
+    #     # optimizer.zero_grad()
+    #     # loss.backward()
+    #     # optimizer.step()
+    # all_reprs = np.concatenate(all_reprs, axis=0)
+    # all_labels = np.concatenate(all_labels, axis=0)
 
-    ## Train linear model on reprs
-    ### SKlearn logistic regression
-    # from sklearn.linear_model import LogisticRegression
+    # ## Train linear model on reprs
+    # ### SKlearn logistic regression
+    # # from sklearn.linear_model import LogisticRegression
 
-    # LR = LogisticRegression(solver='lbfgs', max_iter=1000, multi_class='multinomial')
-    # LR.fit(all_reprs, all_labels)
+    # # LR = LogisticRegression(solver='lbfgs', max_iter=1000, multi_class='multinomial')
+    # # LR.fit(all_reprs, all_labels)
 
-    # # Assuming your input features have the same dimension as the scikit-learn model
-    # input_features = LR.coef_.shape[1]  # Replace with the actual number of features
-    # linear_prob = nn.Linear(input_features, 1) # Binary classification (1 output unit)
+    # # # Assuming your input features have the same dimension as the scikit-learn model
+    # # input_features = LR.coef_.shape[1]  # Replace with the actual number of features
+    # # linear_prob = nn.Linear(input_features, 1) # Binary classification (1 output unit)
 
-    # # Step 4: Assign the weights and bias from scikit-learn model to PyTorch model
-    # with torch.no_grad():  # Disable gradient computation for this operation
-    #     linear_prob.weight.data = torch.from_numpy(LR.coef_).float()
-    #     linear_prob.bias.data = torch.from_numpy(LR.intercept_).float()
+    # # # Step 4: Assign the weights and bias from scikit-learn model to PyTorch model
+    # # with torch.no_grad():  # Disable gradient computation for this operation
+    # #     linear_prob.weight.data = torch.from_numpy(LR.coef_).float()
+    # #     linear_prob.bias.data = torch.from_numpy(LR.intercept_).float()
 
-    # linear_prob.cuda()
-    ### Linear prob 
-    # os.environ["WANDB_MODE"] = "disabled"
-    linear_prob: LinearProb = LinearProb(512, 2, metric_calculator=metric_calculator, log_wandb=False)
-    linear_prob.train(all_reprs_labels_metadata_train,
-                    epochs=15,
-                    lr=5e-3
-                    )
+    # # linear_prob.cuda()
+    # ### Linear prob 
+    # # os.environ["WANDB_MODE"] = "disabled"
+    # linear_prob: LinearProb = LinearProb(512, 2, metric_calculator=metric_calculator, log_wandb=False)
+    # linear_prob.train(all_reprs_labels_metadata_train,
+    #                 epochs=15,
+    #                 lr=5e-3
+    #                 )
+    
+    
     ## Get test reprs
     ## MEMO on linear model
     loader = test_loader
-
+    adapt_to_test = False
 
     from memo_experiment import batched_marginal_entropy
     metric_calculator = MetricCalculator()
@@ -240,22 +255,25 @@ for LEAVE_OUT in ["UVA", ]: #"JH", "PMCC",  "PCC"]:
 
         # Adapt to test
         _images_augs = images_augs.reshape(-1, *images_augs.shape[2:]).cuda()
-        adaptation_fe_model = deepcopy(model)
-        # adaptation_head_model = deepcopy(linear_prob)
-        adaptation_head_model = deepcopy(linear_prob.linear)
+        adaptation_fe_model = deepcopy(finetuner_model.feature_extractor)
+        adaptation_head_model = deepcopy(finetuner_model.linear)
+        # adaptation_fe_model = deepcopy(model)
+        # # adaptation_head_model = deepcopy(linear_prob)
+        # adaptation_head_model = deepcopy(linear_prob.linear)
         # adaptation_fe_model.eval()
-        params = [{"params": adaptation_head_model.parameters()}, {"params": adaptation_fe_model.parameters()}]
-        optimizer = optim.SGD(params, lr=1e-3)
-        
-        # optimizer = optim.SGD(adaptation_head_model.parameters(), lr=1e-10)
-        # reprs = adaptation_fe_model(_images_augs).detach() # for only adapting head
-        for j in range(1):
-            optimizer.zero_grad()
-            reprs = adaptation_fe_model(_images_augs) # for only adapting head
-            outputs = adaptation_head_model(reprs).reshape(batch_size, aug_size, -1)  
-            loss, logits = batched_marginal_entropy(outputs)
-            loss.mean().backward()
-            optimizer.step()
+        if adapt_to_test:
+            params = [{"params": adaptation_head_model.parameters()}, {"params": adaptation_fe_model.parameters()}]
+            optimizer = optim.SGD(params, lr=1e-3)
+            
+            # optimizer = optim.SGD(adaptation_head_model.parameters(), lr=1e-10)
+            # reprs = adaptation_fe_model(_images_augs).detach() # for only adapting head
+            for j in range(1):
+                optimizer.zero_grad()
+                reprs = adaptation_fe_model(_images_augs) # for only adapting head
+                outputs = adaptation_head_model(reprs).reshape(batch_size, aug_size, -1)  
+                loss, logits = batched_marginal_entropy(outputs)
+                loss.mean().backward()
+                optimizer.step()
         
         # Evaluate
         
@@ -297,7 +315,7 @@ for LEAVE_OUT in ["UVA", ]: #"JH", "PMCC",  "PCC"]:
     metrics_dict
     ## Log with wandb
     import wandb
-    group=f"offline_vicreg_fintn_2048zdim_gn_loco"
+    group=f"offline_vicreg_whl-fintn_2048zdim_gn_loco"
     name= group + f"_{LEAVE_OUT}"
     wandb.init(project="tta", entity="mahdigilany", name=name, group=group)
     # os.environ["WANDB_MODE"] = "enabled"

@@ -217,3 +217,74 @@ def expected_calibration_error(preds, confidence, targets, n_bins=10):
         "n_by_bin": n_by_bin,
         "bins": bins,
     }
+
+
+class CoreMetricCalculator(MetricCalculator):
+    def update(self, batch_meta_data, probs, labels):
+        invs = [meta_data["pct_cancer"][0] for meta_data in batch_meta_data]
+        ids = [meta_data["id"][0] for meta_data in batch_meta_data]
+        for i, id_tensor in enumerate(ids):
+            id = id_tensor.item()
+            
+            # Dict of invs
+            self.core_id_invs[id] = invs[i]
+            
+            # Dict of probs and labels
+            if id in self.core_id_probs:
+                self.core_id_probs[id].append(probs[i])
+                self.core_id_labels[id].append(labels[i])
+            else:
+                self.core_id_probs[id] = [probs[i]]
+                self.core_id_labels[id] = [labels[i]]
+                
+    def get_metrics(self):
+        high_inv_core_ids = self.remove_low_inv_ids(self.core_id_invs)
+        core_metrics: Dict = self.get_core_metrics(high_inv_core_ids)
+        if self.include_all_inv:
+            all_inv_core_metrics: Dict = self.get_core_metrics()
+            core_metrics.update(all_inv_core_metrics)
+        return core_metrics
+    
+    def update_best_score(self, metrics, desc):
+        """This function assumes test is after val"""           
+        if desc == "val" and metrics["core_auroc"] >= self.best_val_score:
+                self.best_val_score = metrics["core_auroc"]
+                self.best_all_inv_val_score = metrics["all_inv_core_auroc"]
+                self.best_score_updated = True
+        elif desc == "val":
+            self.best_score_updated = False
+            
+        if desc == "test" and self.best_score_updated:
+            self.best_test_score = metrics["core_auroc"]
+            self.best_all_inv_test_score = metrics["all_inv_core_auroc"]
+            self.best_score_updated = False
+                
+        return self.best_score_updated, self._get_best_score_dict()
+    
+    def _get_best_score_dict(self):
+        return {
+            "val/best_core_auroc": self.best_val_score,
+            "val/best_all_inv_core_auroc": self.best_all_inv_val_score,
+            "test/best_core_auroc": self.best_test_score,
+            "test/best_all_inv_core_auroc": self.best_all_inv_test_score,
+        }
+    
+    # def get_core_metrics(self, core_ids = None):
+    #     if core_ids is None:
+    #         ids = self.core_id_probs.keys()
+    #     else:
+    #         ids = core_ids
+        
+    #     probs = torch.stack(
+    #         [torch.stack(probs_list).argmax(dim=1).mean(dim=0, dtype=torch.float32)
+    #         for id, probs_list in self.core_id_probs.items() if id in ids])
+    #     probs = torch.cat([(1 - probs).unsqueeze(1), probs.unsqueeze(1)], dim=1)
+
+    #     labels = torch.stack(
+    #         [labels_list[0] for id, labels_list in self.core_id_labels.items() if id in ids])
+        
+    #     return self._get_metrics(
+    #         probs, 
+    #         labels, 
+    #         prefix="all_inv_core_" if core_ids is None else "core_"
+    #         )

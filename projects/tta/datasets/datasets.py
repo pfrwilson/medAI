@@ -448,3 +448,104 @@ class ExactNCT2013RFPatchesWithSupportPatches(Dataset):
     def __len__(self):
         return len(self._indices)
     
+
+class ExactNCT2013RFCores(Dataset):
+    def __init__(
+        self,
+        split="train",
+        transform=None,
+        prescale_image: bool = False,
+        cohort_selection_options: CohortSelectionOptions = KFoldCohortSelectionOptions(),
+        patch_options: PatchOptions = PatchOptions(),
+        debug: bool = False,
+    ):
+        super().__init__()
+        self.patch_options = patch_options
+        self.transform = transform
+        self.prescale_image = prescale_image
+        self.split = split
+        self.dataset = ExactNCT2013RFImagesWithAutomaticProstateSegmentation(
+            split, transform=None, cohort_selection_options=cohort_selection_options, cache=True
+        )
+        
+        self.base_positions = list(compute_base_positions(
+            (28, 46.06), patch_options
+        )) 
+        _needle_mask = resize(self.dataset.dataset.needle_mask, (256, 256), order=0, anti_aliasing=False)
+        self.base_positions = list(
+            compute_mask_intersections(
+                self.base_positions,
+                _needle_mask,
+                "needle",
+                (28, 46.06),
+                patch_options.needle_mask_threshold,
+            )
+        )
+        
+        self.positions = []
+        # index mapping for handling empty positions
+        self.index_mapping = list(range(len(self.dataset)))
+        pop_counter = 0
+        for i in tqdm(range(len(self.dataset)), desc="Computing positions"):
+            positions = self.base_positions.copy()
+            positions = list(
+                compute_mask_intersections(
+                    positions,
+                    self.dataset[i]["prostate_mask"],
+                    "prostate",
+                    (28, 46.06),
+                    patch_options.prostate_mask_threshold,
+                )
+            )
+            
+            if len(positions) == 0:
+                self.index_mapping.pop(i-pop_counter)
+                pop_counter += 1
+            
+            self.positions.append(positions)
+            
+            self.debug = debug
+            if debug and i > 20:
+                break 
+        a=10
+        
+    def __getitem__(self, index):
+        item = self.dataset[self.index_mapping[index]]
+        image = item.pop("rf_image")
+        
+        if self.prescale_image: 
+            image = (image - image.min()) / (image.max() - image.min())
+
+        item.pop("needle_mask")
+        item.pop("prostate_mask")
+
+        item["label"] = item["grade"] != "Benign"
+
+        patches = []
+        positions = []
+        min_axial, min_lateral = np.inf, np.inf
+        for j, position in enumerate(self.positions[self.index_mapping[index]]):
+            image_patch, position = select_patch(image, position, self.patch_options)
+            patches.append(image_patch)
+            positions.append(position["position"])    
+            min_axial = min(min_axial, image_patch.shape[0])
+            min_lateral = min(min_lateral, image_patch.shape[1])    
+        
+        # Resize support patches to the same size and stack them
+        patches = [patch[:min_axial, :min_lateral] for patch in patches]
+        
+        if len(patches) == 0:
+            return None
+        
+        item["patches"] = np.stack(patches)[:, None, ...] # Add channel dimension
+        item["positions"] = np.stack(positions)
+        
+        if self.transform is not None:
+            item = self.transform(item)
+
+        return item
+    
+    def __len__(self):
+        if self.debug:
+            return 20  
+        return len(self.index_mapping)
