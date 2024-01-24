@@ -166,4 +166,6 @@ cython_debug/
 *.code-workspace
 pyrightconfig.json
 *.pth
+launch.json
 ```
+.vscode/settings.json

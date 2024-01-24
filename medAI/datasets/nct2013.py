@@ -304,7 +304,6 @@ class ExactNCT2013RFImages(ExactNCT2013Cores):
 
         if self.transform is not None:
             out = self.transform(out)
-
         return out
 
 
@@ -565,6 +564,7 @@ def compute_mask_intersections(
 
 def select_patch(image, position_dict, patch_options):
     position_dict = position_dict.copy()
+
     xmin_mm, ymin_mm, xmax_mm, ymax_mm = position_dict.pop("position")
 
     # we shift the patch by a random amount
@@ -641,7 +641,7 @@ class _ExactNCTPatchesDataset(Dataset):
     def __getitem__(self, index):
         i, j = self._indices[index]
         item = self.dataset[i]
-        
+
         image = item.pop(self.item_name_for_patches)
         if self.prescale_image:
             image = (image - image.min()) / (image.max() - image.min())

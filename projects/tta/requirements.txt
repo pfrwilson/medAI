@@ -1,0 +1,17 @@
+learn2learn
+scikit-learn
+scikit-image
+pandas
+numpy
+matplotlib
+einops
+tqdm
+torchmetrics
+json
+python-dotenv
+timm
+simple_parsing
+ipykernel
+wandb
+submitit
+coolname
