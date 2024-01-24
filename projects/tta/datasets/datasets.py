@@ -498,6 +498,7 @@ class ExactNCT2013RFCores(Dataset):
                 )
             )
             
+            # Remove empty positions from index mapping
             if len(positions) == 0:
                 self.index_mapping.pop(i-pop_counter)
                 pop_counter += 1
@@ -507,7 +508,7 @@ class ExactNCT2013RFCores(Dataset):
             self.debug = debug
             if debug and i > 20:
                 break 
-        a=10
+        
         
     def __getitem__(self, index):
         item = self.dataset[self.index_mapping[index]]
