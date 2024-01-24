@@ -242,3 +242,13 @@ def DEFAULT_PREPROCESS_TRANSFORM(iq) -> np.ndarray:
     rf = decimate(rf, 4, axis=0)
 
     return rf
+
+
+class IQPreprocessor:
+    """Preprocesses IQ data to RF data"""
+
+    def __init__(self, decimation_factor=4):
+        ... 
+
+    def __call__(self, iq):
+        return self.transform(iq)
