@@ -1,0 +1,15 @@
+
+checkpoint_dir: null 
+test_center: CRCEO
+benign_to_cancer_ratio: null 
+epochs: 100 
+lr: 1e-4
+log_image_every: 100
+
+model: 
+  name: ibot
+  ema_alpha: 0.999 
+  temp: 0.01
+  sinkhorn_knopp_centering_mode: in_mask
+  token_matching_mode: soft
+

@@ -119,15 +119,14 @@ class MaskedPredictionModule(nn.Module):
         patch_labels = label
         core_predictions = []
         core_labels = []
-        for i in range(B):
+        
+        for i in core_idx.unique().tolist():
             core_idx_i = core_idx == i
             logits_i = logits[core_idx_i]
             predictions_i = logits_i.sigmoid().mean(dim=0)
             core_predictions.append(predictions_i)
-            try: 
-                core_labels.append(label[core_idx_i][0])
-            except: 
-                breakpoint()
+            core_labels.append(label[core_idx_i][0])
+
         core_predictions = torch.stack(core_predictions)
         core_labels = torch.stack(core_labels)
 
@@ -143,7 +142,7 @@ class MaskedPredictionModule(nn.Module):
 
 @model_registry
 class MedSAMCancerDetectorV2(nn.Module):
-    def __init__(self, medsam_checkpoint: str | None = None):
+    def __init__(self, medsam_checkpoint: str | None = None, freeze_backbone: bool=False):
         super().__init__()
         self.medsam_model = sam_model_registry["vit_b"](
             checkpoint="/scratch/ssd004/scratch/pwilson/medsam_vit_b_cpu.pth"
@@ -152,9 +151,24 @@ class MedSAMCancerDetectorV2(nn.Module):
             self.medsam_model.load_state_dict(
                 torch.load(medsam_checkpoint, map_location="cpu")
             )
+        if freeze_backbone: 
+            self.freeze_backbone()
+        else: 
+            self.thaw_backbone()
+
+    def thaw_backbone(self):
+        for param in self.medsam_model.image_encoder.parameters():
+            param.requires_grad = True
+        self._backbone_frozen = False
+
+    def freeze_backbone(self):
+        for param in self.medsam_model.image_encoder.parameters():
+            param.requires_grad = False
+        self._backbone_frozen = True
 
     def forward(self, image):
-        image_emb = self.medsam_model.image_encoder(image)
+        with torch.no_grad() if self._backbone_frozen else torch.enable_grad():
+            image_emb = self.medsam_model.image_encoder(image)
         sparse_emb, dense_emb = self.medsam_model.prompt_encoder(None, None, None)
         mask_logits = self.medsam_model.mask_decoder.forward(
             image_emb,

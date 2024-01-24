@@ -89,6 +89,8 @@ class Experiment(BasicExperiment):
         self.segmentation_model = MedSAMSegmentator(
             image_encoder, prompt_encoder_2, mask_decoder_2
         ).cuda()
+        torch.compile(self.detection_model)
+        torch.compile(self.segmentation_model)
 
         if state is not None:
             self.detection_model.load_state_dict(state["detection_model"])

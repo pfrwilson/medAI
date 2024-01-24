@@ -1,78 +1,58 @@
-import torch
+import hydra 
+import torch 
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from dataclasses import dataclass, asdict
-from simple_parsing import ArgumentParser, Serializable, choice
-from simple_parsing.helpers import Serializable
-from medAI.modeling import LayerNorm2d, Patchify
+import os 
+from dataclasses import dataclass
+from src.data_factory import BModeDataFactoryV1
+from matplotlib import pyplot as plt
 import medAI
-from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
-from segment_anything import sam_model_registry
-from einops import rearrange, repeat
-import wandb
-from tqdm import tqdm
-import submitit
-import matplotlib.pyplot as plt
-import os
+from torch import optim
 import logging
-import numpy as np
-import typing as tp
+from tqdm import tqdm
+import wandb
 from abc import ABC, abstractmethod
-from medsam_cancer_detection_v2_model_registry import (
-    model_registry,
-    MaskedPredictionModule,
-)
-from typing import Any
-import typing as tp
+from einops import rearrange, repeat
+from src.masked_prediction_module import MaskedPredictionModule
+from medAI.modeling.sam import MedSAMForFinetuning
+from omegaconf import OmegaConf
+from medAI.utils.reproducibiliy import set_global_seed, get_all_rng_states, set_all_rng_states
 
 
-@dataclass
-class Config(BasicExperimentConfig):
-    """Training configuration"""
 
-    project: str = "medsam_cancer_detection_v3"
-    fold: int = 0
-    n_folds: int = 5
-    benign_cancer_ratio_for_training: float | None = None
-    epochs: int = 30
-    optimizer: tp.Literal["adam", "sgdw"] = "adam"
-    augment: tp.Literal["none", "v1", "v2"] = "none"
-    loss: tp.Literal["basic_ce", "involvement_tolerant_loss"] = "basic_ce"
-    lr: float = 0.00001
-    wd: float = 0.0
-    batch_size: int = 1
-    model_config: Any = model_registry.get_simple_parsing_subgroups()
-    debug: bool = False
-    accumulate_grad_steps: int = 8
-    min_involvement_pct_training: float = 40.0
-    prostate_threshold: float = 0.5
-    needle_threshold: float = 0.5
-    freeze_backbone_for_n_epochs: int = 0
+@hydra.main(config_path="conf", config_name="train_medsam")
+def main(cfg):
+    Experiment(cfg)()
 
 
-class Experiment(BasicExperiment):
-    config_class = Config
-    config: Config
+class Experiment:
+    def __init__(self, config):
+        logging.info("Setting up experiment")
+        logging.info("Running in directory: " + os.getcwd())
+        self.config = config
+        wandb.init(
+            **config.wandb,
+            config=OmegaConf.to_container(config, resolve=True),
+            dir=hydra.utils.get_original_cwd(),
+        )
+        logging.info("Wandb initialized")
+        logging.info("Wandb url: " + wandb.run.url)
 
-    def setup(self):
+        if 'experiment_state.pth' in os.listdir('.'):
+            logging.info("Loading experiment state from experiment_state.pth")
+            self.state = torch.load('experiment_state.pth')
+        else:
+            logging.info("No experiment state found - starting from scratch") 
+            self.state = None 
+
+        set_global_seed(self.config.get('seed', 42))
+
         # logging setup
-        super().setup()
         self.setup_data()
 
-        if "experiment.ckpt" in os.listdir(self.ckpt_dir):
-            state = torch.load(os.path.join(self.ckpt_dir, "experiment.ckpt"))
-        else:
-            state = None
-
         # Setup model
-        self.model = model_registry.build_from_config(self.config.model_config)
-        self.model = self.model.cuda()
-        torch.compile(self.model)
-
-        if state is not None:
-            self.model.load_state_dict(state["model"])
+        self.setup_model()
+        if self.state is not None:
+            self.model.load_state_dict(self.state["model"])
 
         match self.config.optimizer:
             case "adam":
@@ -94,9 +74,9 @@ class Experiment(BasicExperiment):
             max_epochs=self.config.epochs * len(self.train_loader),
         )
 
-        if state is not None:
-            self.optimizer.load_state_dict(state["optimizer"])
-            self.scheduler.load_state_dict(state["scheduler"])
+        if self.state is not None:
+            self.optimizer.load_state_dict(self.state["optimizer"])
+            self.scheduler.load_state_dict(self.state["scheduler"])
 
         self.masked_prediction_module_train = MaskedPredictionModule(
             needle_mask_threshold=self.config.needle_threshold,
@@ -111,118 +91,55 @@ class Experiment(BasicExperiment):
         logging.info(
             f"Trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"
         )
-        self.epoch = 0 if state is None else state["epoch"]
-        self.best_score = 0 if state is None else state["best_score"]
+        self.epoch = 0 if self.state is None else self.state["epoch"]
+        logging.info(f"Starting at epoch {self.epoch}")
+        self.best_score = 0 if self.state is None else self.state["best_score"]
+        logging.info(f"Best score so far: {self.best_score}")
+        if self.state is not None: 
+            rng_state = self.state['rng']
+            set_all_rng_states(rng_state)
+
+    def setup_model(self):
+        logging.info("Setting up model")
+        self.model = MedSAMForFinetuning(freeze_backbone=self.config.get('freeze_backbone', False))
+        self.model.to(self.config.device)
+        torch.compile(self.model)
 
     def setup_data(self):
-        from torchvision.transforms import InterpolationMode
-        from torchvision.transforms import v2 as T
-        from torchvision.tv_tensors import Image, Mask
-
-        class Transform:
-            def __init__(self, augment='none'):
-                self.augment = augment
-
-            def __call__(self, item):
-                bmode = item["bmode"]
-                bmode = torch.from_numpy(bmode).float().unsqueeze(0)
-                bmode = T.Resize((1024, 1024), antialias=True)(bmode)
-                bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
-                bmode = bmode.repeat(3, 1, 1)
-                bmode = Image(bmode)
-
-                needle_mask = item["needle_mask"]
-                needle_mask = torch.from_numpy(needle_mask).float() * 255
-                needle_mask = T.Resize(
-                    (1024, 1024),
-                    antialias=False,
-                    interpolation=InterpolationMode.NEAREST,
-                )(needle_mask)
-                needle_mask = Mask(needle_mask)
-
-                prostate_mask = item["prostate_mask"]
-                prostate_mask = torch.from_numpy(prostate_mask).float() * 255
-                prostate_mask = T.Resize(
-                    (1024, 1024),
-                    antialias=False,
-                    interpolation=InterpolationMode.NEAREST,
-                )(prostate_mask)
-                prostate_mask = Mask(prostate_mask)
-
-                if self.augment == 'v1':
-                    bmode, needle_mask, prostate_mask = T.RandomAffine(
-                        degrees=0, translate=(0.2, 0.2)
-                    )(bmode, needle_mask, prostate_mask)
-                elif self.augment == 'v2':  
-                    bmode, needle_mask, prostate_mask = T.RandomAffine(
-                        degrees=0, translate=(0.2, 0.2)
-                    )(bmode, needle_mask, prostate_mask)
-                    bmode, needle_mask, prostate_mask = T.RandomResizedCrop(
-                        size=(1024, 1024), scale=(0.8, 1.0)
-                    )(bmode, needle_mask, prostate_mask)
-
-                label = torch.tensor(item["grade"] != "Benign").long()
-                pct_cancer = item["pct_cancer"]
-                if np.isnan(pct_cancer):
-                    pct_cancer = 0
-                involvement = torch.tensor(pct_cancer / 100).float()
-                return bmode, needle_mask, prostate_mask, label, involvement
-
-        from medAI.datasets import (
-            ExactNCT2013BModeImages,
-            CohortSelectionOptions,
-            ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation,
+        logging.info("Setting up data")
+        data_factory = BModeDataFactoryV1(
+            **self.config.data
         )
+        self.train_loader = data_factory.train_loader()
+        self.val_loader = data_factory.val_loader()
+        self.test_loader = data_factory.test_loader()
+        logging.info(f'Number of training batches: {len(self.train_loader)}')
+        logging.info(f'Number of validation batches: {len(self.val_loader)}')
+        logging.info(f'Number of test batches: {len(self.test_loader)}')
+        logging.info(f'Number of training samples: {len(self.train_loader.dataset)}')
+        logging.info(f'Number of validation samples: {len(self.val_loader.dataset)}')
+        logging.info(f'Number of test samples: {len(self.test_loader.dataset)}')
 
-        train_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
-            split="train",
-            transform=Transform(augment=self.config.augment),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=self.config.benign_cancer_ratio_for_training,
-                min_involvement=self.config.min_involvement_pct_training,
-                remove_benign_from_positive_patients=True,
-                fold=self.config.fold,
-                n_folds=self.config.n_folds,
-            ),
-        )
-        val_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
-            split="val",
-            transform=Transform(),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
-                min_involvement=None,
-                fold=self.config.fold,
-                n_folds=self.config.n_folds,
-            ),
-        )
-        test_ds = ExactNCT2013BmodeImagesWithAutomaticProstateSegmentation(
-            split="test",
-            transform=Transform(),
-            cohort_selection_options=CohortSelectionOptions(
-                benign_to_cancer_ratio=None,
-                min_involvement=None,
-                fold=self.config.fold,
-                n_folds=self.config.n_folds,
-            ),
-        )
-        if self.config.debug:
-            train_ds = torch.utils.data.Subset(train_ds, torch.arange(0, 100))
-            test_ds = torch.utils.data.Subset(test_ds, torch.arange(0, 100))
+        # dump core_ids to file 
+        train_core_ids = self.train_loader.dataset.core_ids
+        val_core_ids = self.val_loader.dataset.core_ids
+        test_core_ids = self.test_loader.dataset.core_ids
 
-        self.train_loader = DataLoader(
-            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
-        )
-        self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
-        )
-        self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
-        )
+        with open('train_core_ids.txt', 'w') as f:
+            f.write('\n'.join(train_core_ids))
+        with open('val_core_ids.txt', 'w') as f:
+            f.write('\n'.join(val_core_ids))
+        with open('test_core_ids.txt', 'w') as f:
+            f.write('\n'.join(test_core_ids))
 
+        wandb.save('train_core_ids.txt')
+        wandb.save('val_core_ids.txt')
+        wandb.save('test_core_ids.txt')
+        
     def __call__(self):
-        self.setup()
         for self.epoch in range(self.epoch, self.config.epochs):
             logging.info(f"Epoch {self.epoch}")
+            self.save()
             self.training = True
             self.run_epoch(self.train_loader, desc="train")
             self.training = False
@@ -233,13 +150,14 @@ class Experiment(BasicExperiment):
                 logging.info(f"New best score: {self.best_score}")
                 metrics = self.run_epoch(self.test_loader, desc="test")
                 test_score = metrics["test/core_auc_high_involvement"]
-                torch.save(
-                    self.model.state_dict(),
-                    os.path.join(
-                        self.ckpt_dir,
-                        f"best_model_epoch{self.epoch}_auc{test_score:.2f}.ckpt",
-                    ),
-                )
+                if self.config.get('checkpoint_dir', None):
+                    torch.save(
+                        self.model.state_dict(),
+                        os.path.join(
+                            self.checkpoint_dir,
+                            f"best_model_epoch{self.epoch}_auc{test_score:.2f}.ckpt",
+                        ),
+                    )
 
     def run_epoch(self, loader, desc="train"):
         train = self.training
@@ -257,12 +175,16 @@ class Experiment(BasicExperiment):
 
             acc_steps = 1
             for i, batch in enumerate(tqdm(loader, desc=desc)):
-                bmode, needle_mask, prostate_mask, label, involvement = batch
+                bmode = batch["bmode"]
+                needle_mask = batch["needle_mask"]
+                prostate_mask = batch["prostate_mask"]
+                label = batch["label"]
+                involvement = batch["involvement"]
 
-                bmode = bmode.cuda()
-                needle_mask = needle_mask.cuda()
-                prostate_mask = prostate_mask.cuda()
-                label = label.cuda()
+                bmode = bmode.to(self.config.device)
+                needle_mask = needle_mask.to(self.config.device)
+                prostate_mask = prostate_mask.to(self.config.device)
+                label = label.to(self.config.device)
 
                 with torch.cuda.amp.autocast(): 
                     heatmap_logits = self.model(bmode)
@@ -462,11 +384,16 @@ class Experiment(BasicExperiment):
 
     @torch.no_grad()
     def show_example(self, batch):
-        image, needle_mask, prostate_mask, label, involvement = batch
-        image = image.cuda()
-        needle_mask = needle_mask.cuda()
-        prostate_mask = prostate_mask.cuda()
-        label = label.cuda()
+        image = batch["bmode"]
+        needle_mask = batch["needle_mask"]
+        prostate_mask = batch["prostate_mask"]
+        label = batch["label"]
+        involvement = batch["involvement"]
+
+        image = image.to(self.config.device)
+        needle_mask = needle_mask.to(self.config.device)
+        prostate_mask = prostate_mask.to(self.config.device)
+        label = label.to(self.config.device)
 
         logits = self.model(image)
         masked_prediction_module = (
@@ -475,7 +402,6 @@ class Experiment(BasicExperiment):
             else self.masked_prediction_module_test
         )
         outputs = masked_prediction_module(logits, needle_mask, prostate_mask, label)
-        # outputs: MaskedPredictionModule.Output = self.masked_prediction_module(logits, needle_mask, prostate_mask, label)
         core_prediction = outputs.core_predictions[0].item()
 
         pred = logits.sigmoid()
@@ -516,6 +442,7 @@ class Experiment(BasicExperiment):
         ax[2].set_title(f"Core prediction: {core_prediction:.3f}")
 
     def save(self):
+        logging.info("Saving experiment snapshot")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -523,14 +450,15 @@ class Experiment(BasicExperiment):
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
                 "best_score": self.best_score,
+                "rng": get_all_rng_states(),
             },
-            os.path.join(self.ckpt_dir, "experiment.ckpt"),
+            "experiment.ckpt",
         )
 
     def checkpoint(self):
         self.save()
         return super().checkpoint()
 
-
+    
 if __name__ == "__main__":
-    Experiment.submit()
+    main()
