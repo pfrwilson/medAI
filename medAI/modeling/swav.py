@@ -76,7 +76,7 @@ class SwAV(nn.Module):
             P_ref = Z @ Q.T
             P_ref = torch.cat([P, P_ref])
 
-            C = sinkhorn_knopp(P_ref, self.eps, self.n_sinkhorn_iters)
+            C = sinkhorn(P_ref, self.eps, self.n_sinkhorn_iters)
             C = C[:B, :]
             C = C.softmax(-1)
 
