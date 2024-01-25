@@ -110,27 +110,27 @@
 # done 
 
 
-# vicreg pretrain experiment
-INSTANCE_NORM=False
-USE_BATCH_NORM=False
-GROUP="vicreg_pretrn_2048zdim_gn_loco"
-for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
-do
-    python vicreg_pretrain_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM \
-        --epochs 100 \
-        --proj_output_dim 2048 \
-        --cov_coeff 1.0 \
-        --linear_lr 0.005 \
-        --linear_epochs 15
-done
+# # vicreg pretrain experiment
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# GROUP="vicreg_pretrn_2048zdim_gn_loco"
+# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
+# do
+#     python vicreg_pretrain_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --epochs 100 \
+#         --proj_output_dim 2048 \
+#         --cov_coeff 1.0 \
+#         --linear_lr 0.005 \
+#         --linear_epochs 15
+# done
 
 
 # # vicreg pretrain experiment
@@ -151,3 +151,28 @@ done
 #         --linear_lr 0.005 \
 #         --linear_epochs 20
 # done
+
+
+# vicreg finetune core experiment
+INSTANCE_NORM=False
+USE_BATCH_NORM=False
+GROUP="vicreg_finetune_1e-4backlr_1e-4headlr_8heads_512qkv_gn_loco"
+# --group "${GROUP}" \
+for CENTER in  "JH" "PCC" # "PMCC" "UVA" "CRCEO" 
+do
+    python vicreg_finetune_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --cluster "slurm" \
+        --slurm_gres "gpu:a40:1" \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --instance_norm $INSTANCE_NORM \
+        --use_batch_norm $USE_BATCH_NORM \
+        --epochs 50 \
+        --core_batch_size 12 \
+        --nhead 8 \
+        --qk_dim 512 \
+        --v_dim 512 \
+        --backbone_lr 0.0001 \
+        --head_lr 0.0001
+done

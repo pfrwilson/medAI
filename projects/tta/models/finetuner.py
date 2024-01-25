@@ -118,8 +118,8 @@ class Fineturner:
 
 @dataclass
 class AttentionConfig:
-    nhead: int= 8
-    k_dim: int = 64
+    nhead: int = 8
+    qk_dim: int = 64
     v_dim: int = 128
     dropout: float= 0.
 
@@ -146,22 +146,29 @@ class AttentionFineturner:
         #     batch_first=True,
         #     ).cuda()
         
-        self.attention = nn.MultiheadAttention(
-            embed_dim=feature_dim,
-            num_heads=attention_config.nhead,
-            dropout=attention_config.dropout,
-            batch_first=True,
-            ).cuda()
-        
-        # self.attention = SimpleMultiheadAttention(
-        #     input_dim=feature_dim,
-        #     qk_dim=attention_config.k_dim,
-        #     v_dim=attention_config.v_dim,
+        # self.attention = nn.MultiheadAttention(
+        #     embed_dim=feature_dim,
         #     num_heads=attention_config.nhead,
-        #     drop_out=attention_config.dropout
-        # ).cuda()
+        #     dropout=attention_config.dropout,
+        #     batch_first=True,
+        #     ).cuda()
         
-        self.linear = nn.Linear(feature_dim, num_classes).cuda()
+        self.attention = SimpleMultiheadAttention(
+            input_dim=feature_dim,
+            qk_dim=attention_config.qk_dim,
+            v_dim=attention_config.v_dim,
+            num_heads=attention_config.nhead,
+            drop_out=attention_config.dropout
+        ).cuda()
+        
+        # self.linear = nn.Linear(feature_dim, num_classes).cuda()
+        self.linear = torch.nn.Sequential(
+            # torch.nn.Linear(feature_dim, 64),
+            torch.nn.Linear(attention_config.nhead*attention_config.v_dim, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, num_classes),
+            # torch.nn.Softmax(dim=1)
+        ).cuda()
         
         self.metric_calculator = metric_calculator
         self.core_batch_size = core_batch_size

@@ -38,7 +38,7 @@ class ScaledDotProductAttention(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, input_dim, qk_dim, v_dim, num_heads, num_classes, drop_out=0.0):
+    def __init__(self, input_dim, qk_dim, v_dim, num_heads, drop_out=0.0):
         super(MultiheadAttention, self).__init__()
 
         self.num_heads = num_heads
@@ -62,23 +62,21 @@ class MultiheadAttention(nn.Module):
         )
         self.scaled_dot = ScaledDotProductAttention(temperature=qk_dim**0.5)
 
-        self.linears = torch.nn.Sequential(
-            torch.nn.Linear(self.v_dim * num_heads, v_dim),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=drop_out),
-            torch.nn.Linear(v_dim, num_classes),
-            # torch.nn.Softmax(dim=1)
-        )
-        # self._reset_parameters()
+        # self.linears = torch.nn.Sequential(
+        #     torch.nn.Linear(self.v_dim * num_heads, v_dim),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Dropout(p=drop_out),
+        #     torch.nn.Linear(v_dim, num_classes),
+        #     # torch.nn.Softmax(dim=1)
+        # )
 
-    # def _reset_parameters(self):
-    #     # Original Transformer initialization, see PyTorch documentation
-    #     nn.init.xavier_uniform_(self.qkv_proj.weight)
-    #     self.qkv_proj.bias.data.fill_(0)
-    #     nn.init.xavier_uniform_(self.o_proj.weight)
-    #     self.o_proj.bias.data.fill_(0)
 
-    def _forward_attn(self, x, mask=None, return_attention=True):
+    def forward(self, x: Tensor, y: Tensor, z: Tensor, mask=None, return_attention=True):
+        no_batch = False
+        if x.ndim == 2:
+            x = x.unsqueeze(0)
+            no_batch = True
+            
         batch_size, seq_length, token_dim = x.size()
         qk = self.qk_proj(x)
         v = self.v_proj(x)
@@ -99,42 +97,24 @@ class MultiheadAttention(nn.Module):
             batch_size, seq_length, self.v_dim * self.num_heads
         )
         o = self.o_proj(attn_value)
+        o = o.squeeze(0) if no_batch else o
 
         if return_attention:
             return o, attn_logits
         else:
             return o
 
-    # def forward(self, x: Tensor, corelen, return_attention=False, *args):
-        # corelen_start = corelen
-        # corelen_end = np.append(corelen[1:].detach().cpu(), None)
 
-        # outputs = []
-        # attentions = []
-        # for i, j in zip(corelen_start, corelen_end):
-        #     attn_outs, attn_logits = self._forward_impl(
-        #         x[None, i:j, ...], return_attention=True
-        #     )
-        #     outs = self.linears(attn_outs.squeeze(0))
-        #     outs = torch.mean(outs, dim=0)
-        #     outputs.append(outs)
-        #     attentions.append(attn_logits)
-
-        # if return_attention:
-        #     return torch.stack(outputs, dim=0), torch.stack(attentions, dim=0)
-        # else:
-            # return torch.stack(outputs, dim=0)
-
-    def forward(self, x: Tensor, return_attention=True, *args):
-        attn_outs, attn_logits = self._forward_attn(x, return_attention=True) # [batch, seq_len, head*v_dim]
+    # def forward(self, x: Tensor, return_attention=True, *args):
+    #     attn_outs, attn_logits = self._forward_attn(x, return_attention=True) # [batch, seq_len, head*v_dim]
         
-        outs = torch.mean(attn_outs, dim=1) #[batch, head*v_dim]
-        outs = self.linears(outs) #[batch, num_classes]
+    #     outs = torch.mean(attn_outs, dim=1) #[batch, head*v_dim]
+    #     outs = self.linears(outs) #[batch, num_classes]
 
-        if return_attention:
-            return outs, attn_logits
-        else:
-            return outs
+    #     if return_attention:
+    #         return outs, attn_logits
+    #     else:
+    #         return outs
 
 # This module is copied from code of "Attention-based Deep Multiple Instance Learning"
 class AttentionMIL(nn.Module):

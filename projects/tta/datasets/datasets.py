@@ -506,7 +506,7 @@ class ExactNCT2013RFCores(Dataset):
             self.positions.append(positions)
             
             self.debug = debug
-            if debug and i > 20:
+            if debug and i > 40:
                 break 
         
         
@@ -548,5 +548,5 @@ class ExactNCT2013RFCores(Dataset):
     
     def __len__(self):
         if self.debug:
-            return 20  
+            return 41  
         return len(self.index_mapping)

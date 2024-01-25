@@ -269,6 +269,18 @@ class CoreMetricCalculator(MetricCalculator):
             "test/best_all_inv_core_auroc": self.best_all_inv_test_score,
         }
     
+    def initialize_best_score(self, best_score_dict: Dict = None):
+        if best_score_dict is None:
+            self.best_val_score = 0.0
+            self.best_all_inv_val_score = 0.0
+            self.best_test_score = 0.0
+            self.best_all_inv_test_score = 0.0
+        else:
+            self.best_val_score = best_score_dict["val/best_core_auroc"]
+            self.best_all_inv_val_score = best_score_dict["val/best_all_inv_core_auroc"]
+            self.best_test_score = best_score_dict["test/best_core_auroc"]
+            self.best_all_inv_test_score = best_score_dict["test/best_all_inv_core_auroc"]
+    
     # def get_core_metrics(self, core_ids = None):
     #     if core_ids is None:
     #         ids = self.core_id_probs.keys()
