@@ -189,6 +189,7 @@ class AttentionFineturner:
                 ]
         
         optimizer = optim.Adam(params, weight_decay=1e-6)
+        sched_steps_per_epoch = len(loader) // self.core_batch_size + 1
         scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             optimizer,
             warmup_epochs=2 * len(loader),

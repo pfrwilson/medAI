@@ -43,23 +43,21 @@
 # # baseline experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# # GROUP="baseline_gn_loco"
-# GROUP="sam_baseline_gn_e-4rho_loco"
+# GROUP="baseline_gn_loco2"
+# # GROUP="sam_baseline_gn_e-4rho_loco"
 # # GROUP="baseline_bn_inst-nrm_loco"
 
-# for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
+# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
 # do
 #     python baseline_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
 #         --group "${GROUP}" \
 #         --cluster "slurm" \
-#         --slurm_gres "gpu:rtx6000:1" \
+#         --slurm_gres "gpu:a40:1" \
 #         --cohort_selection_config "loco" \
 #         --leave_out $CENTER \
 #         --instance_norm $INSTANCE_NORM \
 #         --use_batch_norm $USE_BATCH_NORM \
-#         --optimizer_config "sam" \
-#         --rho 0.0001\
 #         --lr 0.0001
 # done
 
@@ -113,8 +111,8 @@
 # # vicreg pretrain experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_pretrn_2048zdim_gn_loco"
-# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
+# GROUP="vicreg_pretrn_2048zdim_gn_loco2"
+# for CENTER in "JH" #"PCC" "PMCC" "UVA" "CRCEO"
 # do
 #     python vicreg_pretrain_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -153,14 +151,39 @@
 # done
 
 
-# vicreg finetune core experiment
+# # vicreg finetune core experiment
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# GROUP="vicreg_finetune_1e-4backlr_1e-3headlr_8heads_64qk128v_gn_loco"
+# # --group "${GROUP}" \
+# for CENTER in "JH" "PCC" # "PMCC" "UVA" "CRCEO" 
+# do
+#     python core_finetune_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --epochs 50 \
+#         --core_batch_size 12 \
+#         --nhead 8 \
+#         --qk_dim 64 \
+#         --v_dim 128 \
+#         --backbone_lr 0.0001 \
+#         --head_lr 0.001
+# done
+
+
+# vicreg finetune experiment
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="vicreg_finetune_1e-4backlr_1e-4headlr_8heads_512qkv_gn_loco"
+GROUP="vicreg_finetune_1e-3lr_gn_loco"
 # --group "${GROUP}" \
-for CENTER in  "JH" "PCC" # "PMCC" "UVA" "CRCEO" 
+for CENTER in  "PCC" # "PMCC" "UVA" "CRCEO" 
 do
-    python vicreg_finetune_experiment.py \
+    python finetune_experiment.py \
         --name "${GROUP}_${CENTER}" \
         --cluster "slurm" \
         --slurm_gres "gpu:a40:1" \
@@ -169,10 +192,7 @@ do
         --instance_norm $INSTANCE_NORM \
         --use_batch_norm $USE_BATCH_NORM \
         --epochs 50 \
-        --core_batch_size 12 \
-        --nhead 8 \
-        --qk_dim 512 \
-        --v_dim 512 \
-        --backbone_lr 0.0001 \
-        --head_lr 0.0001
+        --train_backbone True \
+        --backbone_lr 0.001 \
+        --head_lr 0.001
 done

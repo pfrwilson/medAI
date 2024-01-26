@@ -59,14 +59,14 @@ class FinetunerConfig:
     train_backbone: bool = True
     backbone_lr: float = 1e-4
     head_lr: float = 5e-4
-    core_batch_size: int =16
+    core_batch_size: int = 16
     attention_config: AttentionConfig = AttentionConfig()
     
 
 @dataclass
 class CoreFinetuneConfig(BaselineConfig):
     """Configuration for the experiment."""
-    name: str = " finetune_test_1"
+    name: str = " finetune_test_5"
     resume: bool = True
     debug: bool = False
     use_wandb: bool = True
@@ -74,7 +74,7 @@ class CoreFinetuneConfig(BaselineConfig):
     batch_size: int = 1
     epochs: int = 100
     cohort_selection_config: KFoldCohortSelectionOptions | LeaveOneCenterOutCohortSelectionOptions = subgroups(
-        {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='JH')},
+        {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='PCC')},
         default="loco"
     )
     model_config: FeatureExtractorConfig = FeatureExtractorConfig(features_only=True)
@@ -91,8 +91,8 @@ class CoreFinetuneExperiment(BaselineExperiment):
         self.best_score_updated = False
         self._checkpoint_path = os.path.join(
             os.getcwd(),
-            # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco/vicreg_pretrn_2048zdim_gn_loco_{self.config.cohort_selection_config.leave_out}/', 
-            f'logs/tta/vicreg_pretrn_2048zdim_gn_loco/vicreg_pretrn_2048zdim_gn_loco_{self.config.cohort_selection_config.leave_out}/', 
+            # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+            f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
             'best_model.ckpt'
             )
   
@@ -114,15 +114,16 @@ class CoreFinetuneExperiment(BaselineExperiment):
                 ]
         else:
             params = [
-                {"params": self.attention.parameters(), "lr": self.config.finetuner_config.head_lr},
-                {"params": self.linear.parameters(), "lr": self.config.finetuner_config.head_lr}
+                {"params": self.attention.parameters(),  "lr": self.config.finetuner_config.head_lr},
+                {"params": self.linear.parameters(),  "lr": self.config.finetuner_config.head_lr}
                 ]
         
-        self.optimizer = optim.Adam(params, weight_decay=1e-6)
+        self.optimizer = optim.Adam(params, weight_decay=1e-6) #lr=self.config.finetuner_config.backbone_lr,
+        sched_steps_per_epoch = len(self.train_loader) // self.config.finetuner_config.core_batch_size + 1 
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
-            warmup_epochs=5 * len(self.train_loader),
-            max_epochs=self.config.epochs * len(self.train_loader),
+            warmup_epochs=5 * sched_steps_per_epoch,
+            max_epochs=self.config.epochs * sched_steps_per_epoch,
         )
         
         # Setup epoch and best score
@@ -328,7 +329,9 @@ class CoreFinetuneExperiment(BaselineExperiment):
                     loss.backward()
                     self.optimizer.step()
                     self.scheduler.step()
-                    wandb.log({"lr": self.scheduler.get_last_lr()[0]})
+                    learning_rates = {f"lr_group_{i}": lr for i, lr in enumerate(self.scheduler.get_last_lr())}
+                    # wandb.log({"lr": self.scheduler.get_last_lr()[0]})
+                    wandb.log(learning_rates)
                 
                 self.log_losses(loss.item(), desc)
                 
