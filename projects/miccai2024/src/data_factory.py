@@ -26,7 +26,7 @@ class DataFactory(ABC):
 
 
 class TransformV1:
-    def __init__(self, augment="none", image_size=1024):
+    def __init__(self, augment="translate", image_size=1024):
         self.augment = augment
         self.image_size = image_size
 
@@ -60,14 +60,18 @@ class TransformV1:
         )(prostate_mask)
         prostate_mask = Mask(prostate_mask)
 
-        if self.augment == "v1":
+        if self.augment == "translate":
             bmode, needle_mask, prostate_mask = T.RandomAffine(
                 degrees=0, translate=(0.2, 0.2)
             )(bmode, needle_mask, prostate_mask)
-        elif self.augment == "v2":
+        elif self.augment == "translate_crop":
             bmode, needle_mask, prostate_mask = T.RandomAffine(
                 degrees=0, translate=(0.2, 0.2)
             )(bmode, needle_mask, prostate_mask)
+            bmode, needle_mask, prostate_mask = T.RandomResizedCrop(
+                size=(self.image_size, self.image_size), scale=(0.8, 1.0)
+            )(bmode, needle_mask, prostate_mask)
+        elif self.augment == "resized_crop":
             bmode, needle_mask, prostate_mask = T.RandomResizedCrop(
                 size=(self.image_size, self.image_size), scale=(0.8, 1.0)
             )(bmode, needle_mask, prostate_mask)
