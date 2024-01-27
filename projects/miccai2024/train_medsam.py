@@ -21,25 +21,32 @@ from medAI.utils.reproducibiliy import set_global_seed, get_all_rng_states, set_
 
 @hydra.main(config_path="conf", config_name="train_medsam")
 def main(cfg):
-    Experiment(cfg)()
-
+    exp = Experiment(cfg)
+    exp.run()
 
 class Experiment:
     def __init__(self, config):
+        self.config = config
+
+    def setup(self):
         logging.info("Setting up experiment")
         logging.info("Running in directory: " + os.getcwd())
-        self.config = config
+
         wandb.init(
-            **config.wandb,
-            config=OmegaConf.to_container(config, resolve=True),
+            **self.config.wandb,
+            config=OmegaConf.to_container(self.config, resolve=True),
             dir=hydra.utils.get_original_cwd(),
         )
         logging.info("Wandb initialized")
         logging.info("Wandb url: " + wandb.run.url)
+        # for reproducibility, save full hydra config
+        wandb.save(".hydra/**")
 
-        if 'experiment_state.pth' in os.listdir('.'):
+        self.exp_state_path = self.config.get('exp_state_path', None) or \
+            os.path.join(os.getcwd(), 'experiment_state.pth')
+        if os.path.exists(self.exp_state_path):
             logging.info("Loading experiment state from experiment_state.pth")
-            self.state = torch.load('experiment_state.pth')
+            self.state = torch.load(self.exp_state_path)
         else:
             logging.info("No experiment state found - starting from scratch") 
             self.state = None 
@@ -54,6 +61,37 @@ class Experiment:
         if self.state is not None:
             self.model.load_state_dict(self.state["model"])
 
+        self.setup_optimizer()
+
+        if self.state is not None:
+            self.optimizer.load_state_dict(self.state["optimizer"])
+            self.scheduler.load_state_dict(self.state["scheduler"])
+
+        self.gradient_scaler = torch.cuda.amp.GradScaler()
+
+        self.epoch = 0 if self.state is None else self.state["epoch"]
+        logging.info(f"Starting at epoch {self.epoch}")
+        self.best_score = 0 if self.state is None else self.state["best_score"]
+        logging.info(f"Best score so far: {self.best_score}")
+        if self.state is not None: 
+            rng_state = self.state['rng']
+            set_all_rng_states(rng_state)
+
+    def setup_model(self):
+        logging.info("Setting up model")
+        self.model = MedSAMForFinetuning(freeze_backbone=self.config.get('freeze_backbone', False))
+        if self.config.encoder_weights_path is not None: 
+            self.model.medsam_model.image_encoder.load_state_dict(torch.load(self.config.encoder_weights_path))
+        self.model.to(self.config.device)
+        torch.compile(self.model)
+
+        self.masked_prediction_module_train = MaskedPredictionModule(
+            needle_mask_threshold=self.config.needle_threshold,
+            prostate_mask_threshold=self.config.prostate_threshold,
+        )
+        self.masked_prediction_module_test = MaskedPredictionModule()
+
+    def setup_optimizer(self):
         match self.config.optimizer:
             case "adam":
                 self.optimizer = optim.Adam(
@@ -73,37 +111,6 @@ class Experiment:
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
         )
-
-        if self.state is not None:
-            self.optimizer.load_state_dict(self.state["optimizer"])
-            self.scheduler.load_state_dict(self.state["scheduler"])
-
-        self.masked_prediction_module_train = MaskedPredictionModule(
-            needle_mask_threshold=self.config.needle_threshold,
-            prostate_mask_threshold=self.config.prostate_threshold,
-        )
-        self.masked_prediction_module_test = MaskedPredictionModule()
-        self.gradient_scaler = torch.cuda.amp.GradScaler()
-
-        logging.info(
-            f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}"
-        )
-        logging.info(
-            f"Trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"
-        )
-        self.epoch = 0 if self.state is None else self.state["epoch"]
-        logging.info(f"Starting at epoch {self.epoch}")
-        self.best_score = 0 if self.state is None else self.state["best_score"]
-        logging.info(f"Best score so far: {self.best_score}")
-        if self.state is not None: 
-            rng_state = self.state['rng']
-            set_all_rng_states(rng_state)
-
-    def setup_model(self):
-        logging.info("Setting up model")
-        self.model = MedSAMForFinetuning(freeze_backbone=self.config.get('freeze_backbone', False))
-        self.model.to(self.config.device)
-        torch.compile(self.model)
 
     def setup_data(self):
         logging.info("Setting up data")
@@ -136,28 +143,38 @@ class Experiment:
         wandb.save('val_core_ids.txt')
         wandb.save('test_core_ids.txt')
         
-    def __call__(self):
+    def run(self):
+        self.setup()
         for self.epoch in range(self.epoch, self.config.epochs):
             logging.info(f"Epoch {self.epoch}")
-            self.save()
+            self.save_experiment_state()
             self.training = True
             self.run_epoch(self.train_loader, desc="train")
             self.training = False
             val_metrics = self.run_epoch(self.val_loader, desc="val")
-            tracked_metric = val_metrics["val/core_auc_high_involvement"]
-            if tracked_metric > self.best_score:
+
+            if val_metrics is not None: 
+                tracked_metric = val_metrics["val/core_auc_high_involvement"]
+                new_record = tracked_metric > self.best_score
+            else: 
+                new_record = None
+            
+            if new_record:
                 self.best_score = tracked_metric
                 logging.info(f"New best score: {self.best_score}")
+                
+            if new_record or self.config.get('test_every_epoch', False):
+                self.training = False
+                logging.info("Running test set")
                 metrics = self.run_epoch(self.test_loader, desc="test")
                 test_score = metrics["test/core_auc_high_involvement"]
-                if self.config.get('checkpoint_dir', None):
-                    torch.save(
-                        self.model.state_dict(),
-                        os.path.join(
-                            self.checkpoint_dir,
-                            f"best_model_epoch{self.epoch}_auc{test_score:.2f}.ckpt",
-                        ),
-                    )
+            else: 
+                test_score = None  
+
+            self.save_model_weights(score=test_score, is_best_score=new_record)            
+
+        logging.info("Finished training")
+        self.teardown()
 
     def run_epoch(self, loader, desc="train"):
         train = self.training
@@ -441,8 +458,8 @@ class Experiment:
         ax[2].imshow(pred[0, 0], alpha=alpha, **kwargs)
         ax[2].set_title(f"Core prediction: {core_prediction:.3f}")
 
-    def save(self):
-        logging.info("Saving experiment snapshot")
+    def save_experiment_state(self):
+        logging.info(f"Saving experiment snapshot to {self.exp_state_path}")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -452,12 +469,25 @@ class Experiment:
                 "best_score": self.best_score,
                 "rng": get_all_rng_states(),
             },
-            "experiment.ckpt",
+            "experiment_state.ckpt",
         )
 
-    def checkpoint(self):
-        self.save()
-        return super().checkpoint()
+    def save_model_weights(self, score, is_best_score=False): 
+        if self.config.get('checkpoint_dir') is None or not is_best_score: 
+            return 
+        logging.info("Saving model to checkpoint directory")
+        logging.info(f"Checkpoint directory: {self.config.checkpoint_dir}")
+        torch.save(
+            self.model.state_dict(),
+            os.path.join(
+                self.checkpoint_dir,
+                f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
+            ),
+        )
+
+    def teardown(self): 
+        # remove checkpoint file since it will take up space
+        os.remove('experiment_state.ckpt')
 
     
 if __name__ == "__main__":
