@@ -117,6 +117,32 @@ def undersample_benign(cores, seed=0, benign_to_cancer_ratio=1):
     return [core for core in cores if core in cores_benign or core in cores_cancer]
 
 
+def apply_core_filters(
+    core_ids, 
+    exclude_benign_cores_from_positive_patients=False,
+    involvement_threshold_pct=None,
+    undersample_benign_ratio=None,
+):
+    if exclude_benign_cores_from_positive_patients:
+        core_ids = remove_benign_cores_from_positive_patients(core_ids)
+
+    if involvement_threshold_pct is not None:
+        if involvement_threshold_pct < 0 or involvement_threshold_pct > 100:
+            raise ValueError(
+                f"involvement_threshold_pct must be between 0 and 100, but got {involvement_threshold_pct}"
+            )
+        core_ids = remove_cores_below_threshold_involvement(
+            core_ids, involvement_threshold_pct
+        )
+
+    if undersample_benign_ratio is not None:
+        core_ids = undersample_benign(
+            core_ids, seed=0, benign_to_cancer_ratio=undersample_benign_ratio
+        )
+
+    return core_ids
+        
+    
 def select_cohort(
     fold=None,
     n_folds=None,
@@ -160,22 +186,31 @@ def select_cohort(
     val_cores = get_core_ids(val)
     test_cores = get_core_ids(test)
 
-    if exclude_benign_cores_from_positive_patients:
-        train_cores = remove_benign_cores_from_positive_patients(train_cores)
+    train_cores = apply_core_filters(
+        train_cores, 
+        exclude_benign_cores_from_positive_patients=exclude_benign_cores_from_positive_patients,
+        involvement_threshold_pct=involvement_threshold_pct,
+        undersample_benign_ratio=undersample_benign_ratio,
+    )
 
-    if involvement_threshold_pct is not None:
-        if involvement_threshold_pct < 0 or involvement_threshold_pct > 100:
-            raise ValueError(
-                f"involvement_threshold_pct must be between 0 and 100, but got {involvement_threshold_pct}"
-            )
-        train_cores = remove_cores_below_threshold_involvement(
-            train_cores, involvement_threshold_pct
-        )
-
-    if undersample_benign_ratio is not None:
-        train_cores = undersample_benign(
-            train_cores, seed=seed, benign_to_cancer_ratio=undersample_benign_ratio
-        )
+    # if exclude_benign_cores_from_positive_patients:
+    #     train_cores = remove_benign_cores_from_positive_patients(train_cores)
+# 
+    # if involvement_threshold_pct is not None:
+    #     if involvement_threshold_pct < 0 or involvement_threshold_pct > 100:
+    #         raise ValueError(
+    #             f"involvement_threshold_pct must be between 0 and 100, but got {involvement_threshold_pct}"
+    #         )
+    #     train_cores = remove_cores_below_threshold_involvement(
+    #         train_cores, involvement_threshold_pct
+    #     )
+# 
+    # if undersample_benign_ratio is not None:
+    #     train_cores = undersample_benign(
+    #         train_cores, seed=seed, benign_to_cancer_ratio=undersample_benign_ratio
+    #     )
 
     return train_cores, val_cores, test_cores
+
+
 
