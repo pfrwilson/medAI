@@ -1,0 +1,39 @@
+  
+data: 
+  # fold: 0
+  # n_folds: 5
+  test_center: UVA
+  min_involvement_train: null
+  batch_size: 1
+  image_size: 1024
+  augmentations: resized_crop
+  undersample_benign_ratio: null
+  batch_size: 4
+  remove_benign_cores_from_positive_patients: false
+  
+device: cuda
+optimizer: adam
+lr: 1e-5
+wd: 0
+epochs: 30
+accumulate_grad_steps: 1
+
+checkpoint_dir: /scratch/ssd004/scratch/pwilson/checkpoints/2024-01-25_medsam_ssl_pretrain
+#exp_state_path: /h/pwilson/projects/medAI/projects/miccai2024/multirun/2024-01-26/11-40-54/0/experiment_state.ckpt
+
+model: 
+  ema_alpha: 0.999
+  teacher_temp: 1
+  student_temp: 1
+  sinkhorn_knopp_centering_mode: in_mask
+  token_matching_mode: hard
+
+wandb: 
+  project: sam_ssl_pretraining
+  group: null
+  name: center_${data.test_center}
+
+hydra: 
+  job: 
+    chdir: true
+  #run: 

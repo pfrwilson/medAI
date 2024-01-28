@@ -1,17 +1,19 @@
 data: 
-  # fold: 0
-  # n_folds: 5
+  fold: null
+  n_folds: null
   test_center: UVA
   undersample_benign_ratio: 3
   min_involvement_train: 40
   batch_size: 1
   image_size: 1024
-  augmentations: v1
+  augmentations: translate
+  remove_benign_cores_from_positive_patients: true
 
 optimizer: adam
 lr: 1e-5
 wd: 0
 epochs: 30
+test_every_epoch: true
 
 needle_threshold: 0.5
 prostate_threshold: 0.5
@@ -22,9 +24,11 @@ loss: basic_ce
 accumulate_grad_steps: 8
 
 wandb: 
-  project: medsam_cancer_detection_v3
+  project: miccai2024
   group: loco_baseline
   name: center_${data.test_center}
+
+encoder_weights_path: null #/scratch/ssd004/scratch/pwilson/checkpoints/2024-01-25_medsam_ssl_pretrain/encoder_3.pth 
 
 hydra: 
   job: 

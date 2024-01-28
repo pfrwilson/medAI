@@ -5,6 +5,7 @@
 data: 
   fold: 0
   n_folds: 5
+  test_center: null
   undersample_benign_ratio: 3
   min_involvement_train: 40
   batch_size: 1
@@ -25,9 +26,7 @@ loss: basic_ce
 accumulate_grad_steps: 8
 
 wandb: 
-  project: medsam_cancer_detection_v3
-  group: loco_baseline
-  name: center_${data.test_center}
+  project: debug
 
 hydra: 
   job: 

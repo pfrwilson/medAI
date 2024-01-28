@@ -11,11 +11,20 @@ hydra:
     cpus_per_task: 16
     mem_gb: 32
     name: ${hydra.job.name}
-    stderr_to_stdout: true
-    qos: m
+    stderr_to_stdout: false
+    qos: m2
     comment: null
     gres: gpu:a40:1
     signal_delay_s: 120
     max_num_timeout: 5
     setup: 
       - export TQDM_MININTERVAL=30
+    additional_parameters:
+        error: /dev/null  
+        output: /dev/null
+        begin: now+60
+
+hydra:
+  callbacks:
+    log_job_return:
+      _target_: hydra.experimental.callbacks.LogJobReturnCallback

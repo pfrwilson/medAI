@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:a40:1
 #SBATCH --time 8:00:00
 #SBATCH -c 16 
-#SBATCH --qos=m2
+#SBATCH --qos=normal
 #SBATCH --output=slurm-%j.log
 
 # send this batch script a SIGUSR1 60 seconds
@@ -13,4 +13,4 @@
 
 export TQDM_MININTERVAL=30
 
-python train_medsam.py 
+python train_medsam.py
