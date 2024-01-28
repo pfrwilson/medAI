@@ -147,22 +147,33 @@ class Experiment:
     def setup_optimizer(self):
         match self.config.optimizer:
             case "adam":
-                self.optimizer = optim.Adam(
-                    self.model.parameters(),
-                    lr=self.config.lr,
+                opt_factory = lambda parameters, lr: optim.Adam(
+                    parameters,
+                    lr=lr,
                     weight_decay=self.config.wd,
                 )
             case "sgdw":
-                self.optimizer = optim.SGD(
-                    self.model.parameters(),
-                    lr=self.config.lr,
+                opt_factory = lambda parameters, lr: optim.SGD(
+                    parameters,
+                    lr=lr,
                     momentum=0.9,
                     weight_decay=self.config.wd,
                 )
+
+        params = [
+            {'params': self.model.medsam_model.image_encoder.parameters(), 'lr': self.config.encoder_lr},
+            {'params': self.model.medsam_model.mask_decoder.parameters(), 'lr': self.config.lr},
+        ]
+        self.optimizer = opt_factory(params, lr=self.config.lr)
+
         self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
+        )
+
+        self.warmup_optimizer = opt_factory(
+            self.model.medsam_model.mask_decoder.parameters(), lr = self.config.warmup_lr
         )
 
     def setup_data(self):
@@ -209,9 +220,9 @@ class Experiment:
         for self.epoch in range(self.epoch, self.config.epochs):
             logging.info(f"Epoch {self.epoch}")
             self.save_experiment_state()
-            self.training = True
+
             self.run_train_epoch(self.train_loader, desc="train")
-            self.training = False
+
             val_metrics = self.run_eval_epoch(self.val_loader, desc="val")
 
             if val_metrics is not None: 
@@ -238,9 +249,6 @@ class Experiment:
         self.teardown()
 
     def train_step(self, batch): 
-        return self.train_step_detection(batch)
-
-    def train_step_detection(self, batch):
         bmode = batch["bmode"]
         needle_mask = batch["needle_mask"]
         prostate_mask = batch["prostate_mask"]
@@ -275,15 +283,8 @@ class Experiment:
 
             return loss 
 
-    def train_step_segmentation(self, batch): 
-        #TODO: implement this
-        ...
-
     @torch.no_grad()
     def eval_step(self, batch, aggregate=True):
-        return self.eval_step_detection(batch, aggregate=aggregate)
-
-    def eval_step_detection(self, batch, aggregate=True):
         bmode = batch["bmode"]
         needle_mask = batch["needle_mask"]
         prostate_mask = batch["prostate_mask"]
@@ -320,13 +321,16 @@ class Experiment:
         
         return mean_predictions_in_mask, label, involvement
 
-    @torch.no_grad()
-    def eval_step_segmentation(self, batch):
-        #TODO: implement this
-        ...
-
     def run_train_epoch(self, loader, desc="train"):
         self.model.train()
+        
+        if self.epoch < self.config.warmup_epochs:
+            optimizer = self.warmup_optimizer
+            scheduler = None
+        else:
+            optimizer = self.optimizer
+            scheduler = self.scheduler
+
         for i, batch in enumerate(tqdm(loader, desc=desc)):
             if self.config.get('limit_train_batches', None) is not None and i > self.config.limit_train_batches:
                 break
@@ -335,15 +339,21 @@ class Experiment:
             self.gradient_scaler.scale(loss).backward()
             
             if i % self.config.accumulate_grad_steps == 0:
-                self.gradient_scaler.step(self.optimizer)
+                self.gradient_scaler.step(optimizer)
                 self.gradient_scaler.update()
-                self.optimizer.zero_grad()
+                optimizer.zero_grad()
                 acc_steps = 1
             else:
                 acc_steps += 1
-            self.scheduler.step()
+
+            metrics = {"train_loss": loss.item() / acc_steps}
+            metrics['lr'] = optimizer.param_groups[0]['lr']
+
+            if scheduler is not None:
+                scheduler.step()
+            
             wandb.log(
-                {"train_loss": loss, "lr": self.scheduler.get_last_lr()[0]}
+                metrics
             )
 
             if i % 100 == 0:
@@ -441,6 +451,11 @@ class Experiment:
 
     @torch.no_grad()
     def show_example(self, batch):
+        # don't log images by default, since they take up a lot of space. 
+        # should be considered more of a debugging/demonstration tool
+        if self.config.get('log_images', False) is False: 
+            return
+
         image = batch["bmode"]
         needle_mask = batch["needle_mask"]
         prostate_mask = batch["prostate_mask"]
@@ -477,15 +492,10 @@ class Experiment:
         ax[0].set_title(f"Ground truth label: {label[0].item()}")
 
         ax[1].imshow(pred[0, 0], **kwargs)
-
-        if self.training:
-            valid_loss_region = (
-                needle_mask[0][0] > self.config.needle_threshold
-            ).float() * (prostate_mask[0][0] > self.config.prostate_threshold).float()
-        else:
-            valid_loss_region = (prostate_mask[0][0] > 0.5).float() * (
-                needle_mask[0][0] > 0.5
-            ).float()
+        
+        valid_loss_region = (prostate_mask[0][0] > 0.5).float() * (
+            needle_mask[0][0] > 0.5
+        ).float()
 
         alpha = torch.nn.functional.interpolate(
             valid_loss_region[None, None], size=(256, 256), mode="nearest"
@@ -532,11 +542,9 @@ class MaskedPredictionModule(nn.Module):
     Computes the patch and core predictions and labels within the valid loss region for a heatmap.
     """
     def __init__(
-        self, needle_mask_threshold: float = 0.5, prostate_mask_threshold: float = 0.5
+        self
     ):
         super().__init__()
-        self.needle_mask_threshold = needle_mask_threshold
-        self.prostate_mask_threshold = prostate_mask_threshold
 
     def forward(self, heatmap_logits, mask):
         """Computes the patch and core predictions and labels within the valid loss region."""

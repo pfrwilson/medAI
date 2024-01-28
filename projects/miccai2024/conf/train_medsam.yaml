@@ -11,6 +11,9 @@ data:
 
 optimizer: adam
 lr: 1e-5
+encoder_lr: 1e-5
+warmup_stage_lr: 1e-4
+warmup_epochs: 5
 wd: 0
 epochs: 30
 test_every_epoch: true
