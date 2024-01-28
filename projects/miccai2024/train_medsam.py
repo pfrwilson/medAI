@@ -138,12 +138,6 @@ class Experiment:
         self.model.to(self.config.device)
         torch.compile(self.model)
 
-        self.masked_prediction_module_train = MaskedPredictionModule(
-            needle_mask_threshold=self.config.needle_threshold,
-            prostate_mask_threshold=self.config.prostate_threshold,
-        )
-        self.masked_prediction_module_test = MaskedPredictionModule()
-
     def setup_optimizer(self):
         match self.config.optimizer:
             case "adam":

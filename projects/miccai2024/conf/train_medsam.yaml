@@ -12,7 +12,7 @@ data:
 optimizer: adam
 lr: 1e-5
 encoder_lr: 1e-5
-warmup_stage_lr: 1e-4
+warmup_lr: 1e-4
 warmup_epochs: 5
 wd: 0
 epochs: 30
@@ -30,6 +30,7 @@ wandb:
   project: miccai2024
   group: loco_baseline
   name: center_${data.test_center}
+log_images: true
 
 encoder_weights_path: null #/scratch/ssd004/scratch/pwilson/checkpoints/2024-01-25_medsam_ssl_pretrain/encoder_3.pth 
 
