@@ -238,6 +238,9 @@ class Experiment:
         self.teardown()
 
     def train_step(self, batch): 
+        return self.train_step_detection(batch)
+
+    def train_step_detection(self, batch):
         bmode = batch["bmode"]
         needle_mask = batch["needle_mask"]
         prostate_mask = batch["prostate_mask"]
@@ -277,7 +280,10 @@ class Experiment:
         ...
 
     @torch.no_grad()
-    def eval_step(self, batch):
+    def eval_step(self, batch, aggregate=True):
+        return self.eval_step_detection(batch, aggregate=aggregate)
+
+    def eval_step_detection(self, batch, aggregate=True):
         bmode = batch["bmode"]
         needle_mask = batch["needle_mask"]
         prostate_mask = batch["prostate_mask"]
@@ -307,9 +313,12 @@ class Experiment:
                 mean_predictions_in_mask.append(predictions[batch_idx == i].sigmoid().mean())
             mean_predictions_in_mask = torch.stack(mean_predictions_in_mask)
             
-            self.mean_predictions_in_mask.append(mean_predictions_in_mask)
-            self.labels.append(label)
-            self.involvement.append(involvement)
+            if aggregate: 
+                self.mean_predictions_in_mask.append(mean_predictions_in_mask)
+                self.labels.append(label)
+                self.involvement.append(involvement)
+        
+        return mean_predictions_in_mask, label, involvement
 
     @torch.no_grad()
     def eval_step_segmentation(self, batch):
@@ -444,7 +453,7 @@ class Experiment:
         label = label.to(self.config.device)
 
         logits = self.model(image) 
-        mean_predictions_in_mask, label, involvement = self.eval_step(batch)
+        mean_predictions_in_mask, label, involvement = self.eval_step(batch, aggregate=False)
         core_prediction = mean_predictions_in_mask[0].item()
 
         pred = logits.sigmoid()
@@ -485,6 +494,8 @@ class Experiment:
         ax[2].set_title(f"Core prediction: {core_prediction:.3f}")
 
     def save_experiment_state(self):
+        if self.config.get('exp_state_path') is None: 
+            return
         logging.info(f"Saving experiment snapshot to {self.exp_state_path}")
         torch.save(
             {
@@ -495,7 +506,7 @@ class Experiment:
                 "best_score": self.best_score,
                 "rng": get_all_rng_states(),
             },
-            "experiment_state.ckpt",
+            self.config.exp_state_path,
         )
 
     def save_model_weights(self, score, is_best_score=False): 
