@@ -5,6 +5,30 @@ from torchvision.transforms import v2 as T
 from torchvision.transforms.functional import InterpolationMode
 from torchvision.tv_tensors import Image, Mask
 import numpy as np
+from medAI.datasets.nct2013.data_access import data_accessor
+
+
+table = data_accessor.get_metadata_table()
+psa_min = table["psa"].min()
+psa_max = table["psa"].max()
+age_min = table["age"].min()
+age_max = table["age"].max()
+
+CORE_LOCATION_TO_IDX = {
+    "LML": 0,
+    "RBL": 1,
+    "LMM": 2,
+    "RMM": 2,
+    "LBL": 1,
+    "LAM": 3,
+    "RAM": 3,
+    "RML": 0,
+    "LBM": 4,
+    "RAL": 5,
+    "RBM": 4,
+    "LAL": 5,
+}
+
 
 
 class DataFactory(ABC):
@@ -86,11 +110,17 @@ class TransformV1:
         if np.isnan(pct_cancer):
             pct_cancer = 0
         out["involvement"] = torch.tensor(pct_cancer / 100).float()
-        out["psa"] = torch.tensor(item["psa"]).float()
-        out["age"] = torch.tensor(item["age"]).float()
-        out["family_history"] = torch.tensor(item["family_history"]).bool()
+        
+        psa = item["psa"]
+        psa = (psa - psa_min) / (psa_max - psa_min)
+        out["psa"] = torch.tensor(psa).float()
+        age = item["age"]
+        age = (age - age_min) / (age_max - age_min)
+        out["age"] = torch.tensor(age).float()
+        out["family_history"] = torch.tensor(item["family_history"]).float() # convert to float to match the other features
         out["center"] = item["center"]
-        out["loc"] = item["loc"]
+        loc = item["loc"]
+        out["loc"] = torch.tensor(CORE_LOCATION_TO_IDX[loc]).long()
         out["all_cores_benign"] = torch.tensor(item["all_cores_benign"]).bool()
         out["dataset_name"] = self.dataset_name
 

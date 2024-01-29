@@ -18,8 +18,13 @@ wd: 0
 epochs: 30
 test_every_epoch: true
 
-needle_threshold: 0.5
+use_task_prompt: true
+use_anatomical_prompt: true
+use_metadata_prompt: true
+
+# for computing valid loss region in training
 prostate_threshold: 0.5
+needle_threshold: 0.5
 
 device: cuda
 
