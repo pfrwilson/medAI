@@ -273,6 +273,10 @@ class Experiment:
                 family_history=family_history,
             )
 
+            if torch.any(torch.isnan(heatmap_logits)):
+                logging.warning("NaNs in heatmap logits")
+                breakpoint()
+
             masks = []
             for i in range(len(heatmap_logits)):
                 mask = prostate_mask[i] > self.config.prostate_threshold
@@ -563,7 +567,7 @@ class Experiment:
         torch.save(
             self.model.state_dict(),
             os.path.join(
-                self.checkpoint_dir,
+                self.config.checkpoint_dir,
                 f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
             ),
         )
@@ -644,14 +648,19 @@ class MedSAMWithPCAPrompts(nn.Module):
 
         self.task_prompt_module = nn.Embedding(n_tasks, EMBEDDING_DIM)
         self.anatomical_prompt_module = nn.Embedding(6, EMBEDDING_DIM)
-        # 3 to 256 MLP to encode metadata
-        self.metadata_prompt_module = nn.Sequential(
-            nn.Linear(len(self.METADATA), 128),
+        # embed floating point values to 256 dim
+        self.psa_prompt_module = nn.Sequential(
+            nn.Linear(1, 128),
             nn.ReLU(),
             nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
         )
+        self.age_prompt_module = nn.Sequential(
+            nn.Linear(1, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),
+        )  
+        # 3 values for family history: 0, 1, 2 (yes, no, unknown)
+        self.family_history_prompt_module = nn.Embedding(3, EMBEDDING_DIM)
 
         self.use_task_prompt = use_task_prompt
         self.use_anatomical_prompt = use_anatomical_prompt
@@ -679,14 +688,20 @@ class MedSAMWithPCAPrompts(nn.Module):
             )
 
         if self.use_metadata_prompt:
-            metadata_embedding = self.metadata_prompt_module(
-                torch.stack([psa, age, family_history], dim=1)
-            )
-            metadata_embedding = metadata_embedding[:, None, :]
-            sparse_embedding = torch.cat(
-                [sparse_embedding, metadata_embedding], dim=1
-            )
+            psa_embedding = self.psa_prompt_module(psa)
+            psa_embedding = psa_embedding[:, None, :]
+            sparse_embedding = torch.cat([sparse_embedding, psa_embedding], dim=1)
 
+            age_embedding = self.age_prompt_module(age)
+            age_embedding = age_embedding[:, None, :]
+            sparse_embedding = torch.cat([sparse_embedding, age_embedding], dim=1)
+
+            family_history_embedding = self.family_history_prompt_module(family_history)
+            family_history_embedding = family_history_embedding[:, None, :]
+            sparse_embedding = torch.cat(
+                [sparse_embedding, family_history_embedding], dim=1
+            )
+    
         mask_logits = self.medsam_model.mask_decoder.forward(
             image_feats,
             self.medsam_model.prompt_encoder.get_dense_pe(),
@@ -711,7 +726,9 @@ class MedSAMWithPCAPrompts(nn.Module):
             self.medsam_model.mask_decoder.parameters(),
             self.task_prompt_module.parameters(),
             self.anatomical_prompt_module.parameters(),
-            self.metadata_prompt_module.parameters(),
+            self.psa_prompt_module.parameters(),
+            self.age_prompt_module.parameters(),
+            self.family_history_prompt_module.parameters(),
         )
 
 if __name__ == "__main__":

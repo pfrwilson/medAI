@@ -11,8 +11,10 @@ from medAI.datasets.nct2013.data_access import data_accessor
 table = data_accessor.get_metadata_table()
 psa_min = table["psa"].min()
 psa_max = table["psa"].max()
+psa_avg = table["psa"].mean()
 age_min = table["age"].min()
 age_max = table["age"].max()
+age_avg = table["age"].mean()
 
 CORE_LOCATION_TO_IDX = {
     "LML": 0,
@@ -112,12 +114,24 @@ class TransformV1:
         out["involvement"] = torch.tensor(pct_cancer / 100).float()
         
         psa = item["psa"]
+        if np.isnan(psa):
+            psa = psa_avg
         psa = (psa - psa_min) / (psa_max - psa_min)
-        out["psa"] = torch.tensor(psa).float()
+        out["psa"] = torch.tensor([psa]).float()
+        
         age = item["age"]
+        if np.isnan(age):
+            age = age_avg
         age = (age - age_min) / (age_max - age_min)
-        out["age"] = torch.tensor(age).float()
-        out["family_history"] = torch.tensor(item["family_history"]).float() # convert to float to match the other features
+        out["age"] = torch.tensor([age]).float()
+        
+        if item["family_history"] is True:
+            out["family_history"] = torch.tensor(1).long()
+        elif item["family_history"] is False:
+            out["family_history"] = torch.tensor(0).long()
+        elif np.isnan(item["family_history"]):
+            out["family_history"] = torch.tensor(2).long()
+
         out["center"] = item["center"]
         loc = item["loc"]
         out["loc"] = torch.tensor(CORE_LOCATION_TO_IDX[loc]).long()
