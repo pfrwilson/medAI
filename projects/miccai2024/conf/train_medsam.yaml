@@ -2,12 +2,12 @@ data:
   fold: null
   n_folds: null
   test_center: UVA
-  undersample_benign_ratio: 3
-  min_involvement_train: 40
+  undersample_benign_ratio: null
+  min_involvement_train: null
   batch_size: 1
   image_size: 1024
   augmentations: translate
-  remove_benign_cores_from_positive_patients: true
+  remove_benign_cores_from_positive_patients: false
 
 optimizer: adam
 lr: 1e-5
@@ -18,23 +18,29 @@ wd: 0
 epochs: 30
 test_every_epoch: true
 
-use_task_prompt: true
-use_anatomical_prompt: true
-use_metadata_prompt: true
+use_task_prompt: false
+use_anatomical_prompt: false
+use_metadata_prompt: false
 
 # for computing valid loss region in training
-prostate_threshold: 0.5
-needle_threshold: 0.5
+loss: 
+  type: basic_ce
+  prostate_threshold: 0.5
+  needle_threshold: 0.5
+  positive_weight: 2.0
+  use_full_prostate_mask_if_all_cores_benign: true
 
 device: cuda
 
-loss: basic_ce
 accumulate_grad_steps: 8
+
+exp_state_path: null # if we want to track and resume
+checkpoint_dir: null # where to save model weights
 
 wandb: 
   project: miccai2024
-  group: loco_baseline
-  name: center_${data.test_center}
+  group: null
+  name: ${data.test_center}_all_cores
 log_images: true
 
 encoder_weights_path: null #/scratch/ssd004/scratch/pwilson/checkpoints/2024-01-25_medsam_ssl_pretrain/encoder_3.pth 

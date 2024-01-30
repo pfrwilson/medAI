@@ -260,6 +260,7 @@ class Experiment:
         age = batch["age"].to(self.config.device)
         family_history = batch["family_history"].to(self.config.device)
         anatomical_location = batch["loc"].to(self.config.device)
+        all_cores_benign = batch["all_cores_benign"].to(self.config.device)
         B = len(bmode)
         task_id=torch.zeros(B, dtype=torch.long, device=bmode.device)
 
@@ -279,8 +280,11 @@ class Experiment:
 
             masks = []
             for i in range(len(heatmap_logits)):
-                mask = prostate_mask[i] > self.config.prostate_threshold
-                mask = mask & (needle_mask[i] > self.config.needle_threshold)
+                if all_cores_benign[i] and self.config.loss.use_full_prostate_mask_if_all_cores_benign:
+                    mask = prostate_mask[i] > 0.5
+                else: 
+                    mask = prostate_mask[i] > self.config.loss.prostate_threshold
+                    mask = mask & (needle_mask[i] > self.config.loss.needle_threshold)
                 masks.append(mask)
             masks = torch.stack(masks)
 
@@ -290,9 +294,9 @@ class Experiment:
                 labels[i] = label[batch_idx[i]]
             labels = labels[..., None]  # needs to match N, C shape of preds
 
-            if self.config.loss == "basic_ce":
+            if self.config.loss.type == "basic_ce":
                 loss = nn.functional.binary_cross_entropy_with_logits(
-                    predictions, labels
+                    predictions, labels, pos_weight=torch.tensor(self.config.loss.pos_weight, device=predictions.device)
                 )
 
             return loss
@@ -567,7 +571,7 @@ class Experiment:
         torch.save(
             self.model.state_dict(),
             os.path.join(
-                self.config.checkpoint_dir,
+                self.checkpoint_dir,
                 f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
             ),
         )
