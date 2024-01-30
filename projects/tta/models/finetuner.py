@@ -137,14 +137,14 @@ class AttentionFineturner:
         ):
         self.feature_extractor = feature_extractor.cuda()
         
-        self.attention = nn.TransformerEncoderLayer(
-            d_model=feature_dim,
-            nhead=attention_config.nhead,
-            # dim_feedforward=attention_config.dim_feedforward,
-            dropout=attention_config.dropout,
-            # activation=attention_config.activation,
-            batch_first=True,
-            ).cuda()
+        # self.attention = nn.TransformerEncoderLayer(
+        #     d_model=feature_dim,
+        #     nhead=attention_config.nhead,
+        #     # dim_feedforward=attention_config.dim_feedforward,
+        #     dropout=attention_config.dropout,
+        #     # activation=attention_config.activation,
+        #     batch_first=True,
+        #     ).cuda()
         
         # self.attention = nn.MultiheadAttention(
         #     embed_dim=feature_dim,
@@ -153,18 +153,18 @@ class AttentionFineturner:
         #     batch_first=True,
         #     ).cuda()
         
-        # self.attention = SimpleMultiheadAttention(
-        #     input_dim=feature_dim,
-        #     qk_dim=attention_config.qk_dim,
-        #     v_dim=attention_config.v_dim,
-        #     num_heads=attention_config.nhead,
-        #     drop_out=attention_config.dropout
-        # ).cuda()
+        self.attention = SimpleMultiheadAttention(
+            input_dim=feature_dim,
+            qk_dim=attention_config.qk_dim,
+            v_dim=attention_config.v_dim,
+            num_heads=attention_config.nhead,
+            drop_out=attention_config.dropout
+        ).cuda()
         
         # self.linear = nn.Linear(feature_dim, num_classes).cuda()
         self.linear = torch.nn.Sequential(
-            torch.nn.Linear(feature_dim, 64),
-            # torch.nn.Linear(attention_config.nhead*attention_config.v_dim, 64),
+            # torch.nn.Linear(feature_dim, 64),
+            torch.nn.Linear(attention_config.nhead*attention_config.v_dim, 64),
             torch.nn.ReLU(),
             torch.nn.Linear(64, num_classes),
             # torch.nn.Softmax(dim=1)
@@ -189,8 +189,8 @@ class AttentionFineturner:
                 ]
         
         optimizer = optim.Adam(params, weight_decay=1e-6)
-        # sched_steps_per_epoch = len(loader) // self.core_batch_size + 1
-        sched_steps_per_epoch = len(loader)
+        sched_steps_per_epoch = len(loader) // self.core_batch_size + 1
+        # sched_steps_per_epoch = len(loader)
         scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
             optimizer,
             warmup_epochs=2 * sched_steps_per_epoch,
@@ -206,63 +206,6 @@ class AttentionFineturner:
             return self.run_epoch_memo(loader, desc, memo_lr=memo_lr)
         return self.run_epoch(loader, None, None, desc)
     
-    # def run_epoch(self, loader, optimizer, scheduler, desc):
-    #     self.feature_extractor.train() if desc == 'train' else self.feature_extractor.eval()
-    #     self.attention.train() if desc == 'train' else self.attention.eval()
-    #     self.linear.train() if desc == 'train' else self.linear.eval()
-        
-    #     self.metric_calculator.reset()
-        
-    #     batch_attention_reprs = []
-    #     batch_labels = []
-    #     batch_meta_data = []
-    #     for i, batch in enumerate(tqdm(loader, desc=desc)):
-    #         images_augs, images, labels, meta_data = batch
-    #         images_augs = images_augs.cuda()
-    #         images = images.cuda()
-    #         labels = labels.cuda()
-            
-    #         # Forward
-    #         reprs = self.feature_extractor(images[0, ...])
-    #         attention_reprs = self.attention(reprs, reprs, reprs)[0].mean(dim=0)[None, ...]
-            
-    #         # Collect
-    #         batch_attention_reprs.append(attention_reprs)
-    #         batch_labels.append(labels[0])
-    #         batch_meta_data.append(meta_data)
-            
-    #         if ((i + 1) % self.core_batch_size == 0) or (i == len(loader) - 1):
-    #             batch_attention_reprs = torch.cat(batch_attention_reprs, dim=0)
-    #             logits = self.linear(batch_attention_reprs)
-                
-    #             labels = torch.stack(batch_labels, dim=0).cuda()
-    #             loss = nn.CrossEntropyLoss()(logits, labels)
-                
-    #             if desc == 'train':
-    #                 optimizer.zero_grad()
-    #                 loss.backward()
-    #                 optimizer.step()
-    #                 scheduler.step()
-                
-    #             if self.log_wandb:
-    #                 self.log_losses(loss.item(), desc)
-                
-    #             # Update metrics   
-    #             self.metric_calculator.update(
-    #                 batch_meta_data = batch_meta_data,
-    #                 probs = F.softmax(logits, dim=-1).detach().cpu(),
-    #                 labels = labels.detach().cpu(),
-    #             )
-                
-    #             batch_attention_reprs = []
-    #             batch_labels = []
-    #             batch_meta_data = []
-            
-    #     # Log metrics
-    #     if self.log_wandb:
-    #         best_score_updated, best_score = self.log_metrics(desc)
-    #         return best_score_updated, best_score
-    
     def run_epoch(self, loader, optimizer, scheduler, desc):
         self.feature_extractor.train() if desc == 'train' else self.feature_extractor.eval()
         self.attention.train() if desc == 'train' else self.attention.eval()
@@ -270,42 +213,99 @@ class AttentionFineturner:
         
         self.metric_calculator.reset()
         
-        for i, batch in enumerate(tqdm(loader, desc=desc)): 
+        batch_attention_reprs = []
+        batch_labels = []
+        batch_meta_data = []
+        for i, batch in enumerate(tqdm(loader, desc=desc)):
             images_augs, images, labels, meta_data = batch
             images_augs = images_augs.cuda()
             images = images.cuda()
             labels = labels.cuda()
             
-            batch_sz, core_len, *img_shape = images.shape
-            
             # Forward
-            reprs = self.feature_extractor(images.reshape(-1, *img_shape)).reshape(batch_sz, core_len, -1)
-            # attention_reprs = self.attention(reprs, reprs, reprs)[0].mean(dim=1)
-            attention_reprs = self.attention(reprs).mean(dim=1)
-            logits = self.linear(attention_reprs)
+            reprs = self.feature_extractor(images[0, ...])
+            attention_reprs = self.attention(reprs, reprs, reprs)[0].mean(dim=0)[None, ...]
             
-            loss = nn.CrossEntropyLoss()(logits, labels)
+            # Collect
+            batch_attention_reprs.append(attention_reprs)
+            batch_labels.append(labels[0])
+            batch_meta_data.append(meta_data)
             
-            if desc == 'train':
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                scheduler.step()
-                # learning_rates = {f"lr_group_{i}": lr for i, lr in enumerate(scheduler.get_last_lr())}
-                # wandb.log(learning_rates)
+            if ((i + 1) % self.core_batch_size == 0) or (i == len(loader) - 1):
+                batch_attention_reprs = torch.cat(batch_attention_reprs, dim=0)
+                logits = self.linear(batch_attention_reprs)
                 
-            
-            # Update metrics   
-            self.metric_calculator.temp_super_update(
-                batch_meta_data = meta_data,
-                probs = F.softmax(logits, dim=-1).detach().cpu(),
-                labels = labels.detach().cpu(),
-            )
+                labels = torch.stack(batch_labels, dim=0).cuda()
+                loss = nn.CrossEntropyLoss()(logits, labels)
                 
+                if desc == 'train':
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    scheduler.step()
+                
+                if self.log_wandb:
+                    self.log_losses(loss.item(), desc)
+                
+                # Update metrics   
+                self.metric_calculator.update(
+                    batch_meta_data = batch_meta_data,
+                    probs = F.softmax(logits, dim=-1).detach().cpu(),
+                    labels = labels.detach().cpu(),
+                )
+                
+                batch_attention_reprs = []
+                batch_labels = []
+                batch_meta_data = []
+            
         # Log metrics
         if self.log_wandb:
             best_score_updated, best_score = self.log_metrics(desc)
             return best_score_updated, best_score
+    
+    # def run_epoch(self, loader, optimizer, scheduler, desc):
+    #     self.feature_extractor.train() if desc == 'train' else self.feature_extractor.eval()
+    #     self.attention.train() if desc == 'train' else self.attention.eval()
+    #     self.linear.train() if desc == 'train' else self.linear.eval()
+        
+    #     self.metric_calculator.reset()
+        
+    #     for i, batch in enumerate(tqdm(loader, desc=desc)): 
+    #         images_augs, images, labels, meta_data = batch
+    #         images_augs = images_augs.cuda()
+    #         images = images.cuda()
+    #         labels = labels.cuda()
+            
+    #         batch_sz, core_len, *img_shape = images.shape
+            
+    #         # Forward
+    #         reprs = self.feature_extractor(images.reshape(-1, *img_shape)).reshape(batch_sz, core_len, -1)
+    #         # attention_reprs = self.attention(reprs, reprs, reprs)[0].mean(dim=1)
+    #         attention_reprs = self.attention(reprs).mean(dim=1)
+    #         logits = self.linear(attention_reprs)
+            
+    #         loss = nn.CrossEntropyLoss()(logits, labels)
+            
+    #         if desc == 'train':
+    #             optimizer.zero_grad()
+    #             loss.backward()
+    #             optimizer.step()
+    #             scheduler.step()
+    #             # learning_rates = {f"lr_group_{i}": lr for i, lr in enumerate(scheduler.get_last_lr())}
+    #             # wandb.log(learning_rates)
+                
+            
+    #         # Update metrics   
+    #         self.metric_calculator.temp_super_update(
+    #             batch_meta_data = meta_data,
+    #             probs = F.softmax(logits, dim=-1).detach().cpu(),
+    #             labels = labels.detach().cpu(),
+    #         )
+                
+    #     # Log metrics
+    #     if self.log_wandb:
+    #         best_score_updated, best_score = self.log_metrics(desc)
+    #         return best_score_updated, best_score
         
     def log_losses(self, batch_loss_avg, desc):
         wandb.log(
