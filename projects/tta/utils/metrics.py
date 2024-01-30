@@ -281,6 +281,23 @@ class CoreMetricCalculator(MetricCalculator):
             self.best_test_score = best_score_dict["test/best_core_auroc"]
             self.best_all_inv_test_score = best_score_dict["test/best_all_inv_core_auroc"]
     
+    def temp_super_update(self, batch_meta_data, probs, labels):
+        invs = deepcopy(batch_meta_data["pct_cancer"])
+        ids = deepcopy(batch_meta_data["id"])
+        for i, id_tensor in enumerate(ids):
+            id = id_tensor.item()
+            
+            # Dict of invs
+            self.core_id_invs[id] = invs[i]
+            
+            # Dict of probs and labels
+            if id in self.core_id_probs:
+                self.core_id_probs[id].append(probs[i])
+                self.core_id_labels[id].append(labels[i])
+            else:
+                self.core_id_probs[id] = [probs[i]]
+                self.core_id_labels[id] = [labels[i]]
+
     # def get_core_metrics(self, core_ids = None):
     #     if core_ids is None:
     #         ids = self.core_id_probs.keys()

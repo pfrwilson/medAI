@@ -170,3 +170,4 @@ launch.json
 ```
 .vscode/settings.json
 *.ckpt
+projects/tta/notebooks/attenuer_model_JH.ckpt

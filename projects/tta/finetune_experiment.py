@@ -222,7 +222,7 @@ class FinetuneExperiment(BaselineExperiment):
             pool_type='avg',
             flatten=True,
             input_fmt='NCHW',
-            )
+            ).cuda()
         fe_model = nn.Sequential(TimmFeatureExtractorWrapper(fe_model), global_pool)
         fe_model.load_state_dict(torch.load(self._checkpoint_path)["model"])
         
@@ -270,7 +270,7 @@ class FinetuneExperiment(BaselineExperiment):
             images = images.cuda()
             labels = labels.cuda()
             
-            reprs = self.feature_extractor(images)
+            reprs = self.fe_model(images)
             logits = self.linear(reprs)
             loss = nn.CrossEntropyLoss()(logits, labels)
                 
