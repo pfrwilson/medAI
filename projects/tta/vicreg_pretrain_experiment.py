@@ -231,7 +231,7 @@ class VicregPretrainExperiment(BaselineExperiment):
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
-                "ssl_model": self.ssl_model.state_dict() if save_model else None,
+                "ssl_model": self.ssl_model.state_dict(), # if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
