@@ -53,6 +53,7 @@ class FinetunerConfig:
     train_backbone: bool = True
     backbone_lr: float = 1e-3
     head_lr: float = 1e-3
+    checkpoint_path_name: str = None 
     
 
 @dataclass
@@ -68,6 +69,7 @@ class FinetuneConfig(BaselineConfig):
         {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='JH')},
         default="loco"
     )
+    
     model_config: FeatureExtractorConfig = FeatureExtractorConfig(features_only=True)
     finetuner_config: FinetunerConfig = FinetunerConfig()
 
@@ -80,13 +82,21 @@ class FinetuneExperiment(BaselineExperiment):
         super().__init__(config)
         self.best_val_loss = np.inf
         self.best_score_updated = False
-        self._checkpoint_path = os.path.join(
-            os.getcwd(),
-            # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-            f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-            'best_model.ckpt'
-            )
-  
+        if self.config.finetuner_config.checkpoint_path_name is None:
+            self._checkpoint_path = os.path.join(
+                os.getcwd(),
+                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                'best_model.ckpt'
+                )
+        else:
+            self._checkpoint_path = os.path.join(
+                os.getcwd(),
+                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                f'logs/tta/{self.config.finetuner_config.checkpoint_path_name}/{self.config.finetuner_config.checkpoint_path_name}_{self.config.cohort_selection_config.leave_out}/', 
+                'best_model.ckpt'
+                )
+        
     def setup(self):
         # logging setup
         super(BaselineExperiment, self).setup()

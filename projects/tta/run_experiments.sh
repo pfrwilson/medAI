@@ -154,8 +154,10 @@
 # # vicreg finetune core experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_finetune_1e-4backlr_5e-4headlr_1heads_64qkv_8corebz_gn_loco"
+# GROUP="vicreg_1024-300finetune_-4lr_8heads_64qkv_8corebz_gn_loco"
 # # GROUP="vicreg_finetune_1e-4backlr_1e-4headlr_8heads_transformer_gn_loco_batch10_newrunep"
+# checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
+# # checkpoint_path_name="vicreg_pretrn_2048zdim_gn_300ep_loco"
 # # --group "${GROUP}" \
 # for CENTER in "JH" # "PCC" # "PMCC" "UVA" "CRCEO" 
 # do
@@ -172,8 +174,9 @@
 #         --nhead 8 \
 #         --qk_dim 64 \
 #         --v_dim 64 \
+#         --checkpoint_path_name $checkpoint_path_name \
 #         --backbone_lr 0.0001 \
-#         --head_lr 0.0005 \
+#         --head_lr 0.0001 \
 #         --batch_size 1 \
 #         --dropout 0.0 \
 #         # --prostate_mask_threshold -1
@@ -183,12 +186,14 @@
 # # vicreg finetune experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_finetune_1e-3lr_gn_loco2"
-# # --group "${GROUP}" \
-# for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO" 
+# GROUP="vicreg_1024-300finetune_1e-3lr_gn_loco"
+# # checkpoint_path_name="vicreg_pretrn_2048zdim_gn_300ep_loco"
+# checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
+# for CENTER in "PCC" # "JH" # "PMCC" "UVA" "CRCEO" 
 # do
 #     python finetune_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
 #         --cluster "slurm" \
 #         --slurm_gres "gpu:a40:1" \
 #         --cohort_selection_config "loco" \
@@ -197,15 +202,17 @@
 #         --use_batch_norm $USE_BATCH_NORM \
 #         --epochs 50 \
 #         --train_backbone True \
+#         --checkpoint_path_name $checkpoint_path_name \
 #         --backbone_lr 0.001 \
 #         --head_lr 0.001
 # done
 
+
 # Divemble experiment
-NUM_ENSEMBLES=10
+NUM_ENSEMBLES=5
 INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="Divemble_gn_${NUM_ENSEMBLES}mdls_.2var.05cov_100ep_loco"
+GROUP="Divemble_gn_${NUM_ENSEMBLES}mdls_.5var.05cov_100ep_loco"
 # --group "${GROUP}" \
 for CENTER in "JH" # "PCC" "PMCC" "UVA" "CRCEO"
 do
@@ -219,6 +226,6 @@ do
         --instance_norm $INSTANCE_NORM \
         --use_batch_norm $USE_BATCH_NORM \
         --epochs 100 \
-        --var_reg 0.2 \
+        --var_reg 0.5 \
         --cov_reg 0.05     
 done

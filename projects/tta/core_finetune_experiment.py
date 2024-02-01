@@ -63,6 +63,7 @@ class FinetunerConfig:
     head_lr: float = 5e-4
     core_batch_size: int = 16
     attention_config: AttentionConfig = AttentionConfig()
+    checkpoint_path_name: str = None 
     
 
 @dataclass
@@ -91,12 +92,20 @@ class CoreFinetuneExperiment(BaselineExperiment):
         super().__init__(config)
         self.best_val_loss = np.inf
         self.best_score_updated = False
-        self._checkpoint_path = os.path.join(
-            os.getcwd(),
-            # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-            f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-            'best_model.ckpt'
-            )
+        if self.config.finetuner_config.checkpoint_path_name is None:
+            self._checkpoint_path = os.path.join(
+                os.getcwd(),
+                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                'best_model.ckpt'
+                )
+        else:
+            self._checkpoint_path = os.path.join(
+                os.getcwd(),
+                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+                f'logs/tta/{self.config.finetuner_config.checkpoint_path_name}/{self.config.finetuner_config.checkpoint_path_name}_{self.config.cohort_selection_config.leave_out}/', 
+                'best_model.ckpt'
+                )
   
     def setup(self):
         # logging setup
