@@ -44,14 +44,14 @@ from medAI.datasets.nct2013 import (
 def diversity_loss_fn(reprs: torch.Tensor):
     """Computes the diversity loss for a set of representations.
     reprs (torch.Tensor): a tensor of shape (n_models, bz, d) containing the representations of bz samples for n_models models."""
-    eps = 1e-4
     
     reprs = reprs.permute(1, 0, 2) # (bz, n_models, d)
     bz, n_models, d = reprs.shape
     
     # Compute the variance loss
-    std_reprs = torch.sqrt(reprs.var(dim=1, keepdim=True) + eps)
-    var_loss = std_reprs.mean(-1).mean()
+    eps = 1e-4
+    std_reprs = torch.sqrt(reprs.var(dim=1, keepdim=True) + eps) # (bz, 1, d)  
+    var_loss = F.relu(1 - std_reprs).mean(-1).mean()
     
     # Compute the covariance loss
     reprs_bar = reprs - reprs.mean(dim=1, keepdim=True) # (bz, n_models, d)
@@ -91,7 +91,7 @@ class DivembleConfig(BaselineConfig):
     )
     
     num_ensembles: int = 5
-    var_reg: float = 0.2
+    var_reg: float = 0.5
     cov_reg: float = 0.05
     model_config: FeatureExtractorConfig = FeatureExtractorConfig(features_only=True)
 
@@ -259,15 +259,13 @@ class Divemblexperiment(BaselineExperiment):
             
     def log_losses(self, loss, ce_loss, var_loss, cov_loss, desc):
         wandb.log({
-            f"{desc}/loss": loss.item(),
-            f"{desc}/ce_loss": ce_loss.item(),
+            f"{desc}/total_loss": loss.item(),
+            f"{desc}/loss": ce_loss.item(),
             f"{desc}/var_loss": var_loss.item(),
             f"{desc}/cov_loss": cov_loss.item(),
             "epoch": self.epoch
         })
           
-
-
 
 class TimmFeatureExtractorWrapper(nn.Module):
     def __init__(self, timm_model):
