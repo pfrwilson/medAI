@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
-from torch.utils.data import DataLoader
+from dataclasses import dataclass
+
+import numpy as np
 import torch
+from medAI.datasets.nct2013.data_access import data_accessor
+from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as T
 from torchvision.transforms.functional import InterpolationMode
 from torchvision.tv_tensors import Image, Mask
-import numpy as np
-from medAI.datasets.nct2013.data_access import data_accessor
-
 
 table = data_accessor.get_metadata_table()
 psa_min = table["psa"].min()
@@ -32,7 +33,6 @@ CORE_LOCATION_TO_IDX = {
 }
 
 
-
 class DataFactory(ABC):
     @abstractmethod
     def train_loader(self):
@@ -50,12 +50,36 @@ class DataFactory(ABC):
         """Show something interesting and maybe log it to wandb."""
         ...
 
+    @classmethod
+    def add_argparse_args(cls, parser):
+        import inspect
+
+        sig = inspect.signature(cls.__init__)
+        for param in sig.parameters.values():
+            if param.name == "self":
+                continue
+            default = param.default if param.default != inspect._empty else None
+            name = param.name
+            type = param.annotation if param.annotation != inspect._empty else str
+            parser.add_argument(f"--{name}", type=type, default=default)
+
+    @classmethod
+    def from_argparse_args(cls, args):
+        import inspect
+
+        sig = inspect.signature(cls.__init__)
+        kwargs = {k: v for k, v in vars(args).items() if k in sig.parameters}
+        return cls(**kwargs)
+
 
 class TransformV1:
-    def __init__(self, augment="translate", image_size=1024, dataset_name="nct"):
+    def __init__(
+        self, augment="translate", image_size=1024, dataset_name="nct", labeled=True
+    ):
         self.augment = augment
         self.image_size = image_size
         self.dataset_name = dataset_name
+        self.labeled = labeled
 
     def __call__(self, item):
         out = {}
@@ -66,6 +90,8 @@ class TransformV1:
         bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
         bmode = bmode.repeat(3, 1, 1)
         bmode = Image(bmode)
+        if not self.labeled:
+            return {"bmode": bmode}
 
         needle_mask = item["needle_mask"]
         needle_mask = needle_mask = torch.from_numpy(needle_mask.copy()).float()
@@ -112,19 +138,19 @@ class TransformV1:
         if np.isnan(pct_cancer):
             pct_cancer = 0
         out["involvement"] = torch.tensor(pct_cancer / 100).float()
-        
+
         psa = item["psa"]
         if np.isnan(psa):
             psa = psa_avg
         psa = (psa - psa_min) / (psa_max - psa_min)
         out["psa"] = torch.tensor([psa]).float()
-        
+
         age = item["age"]
         if np.isnan(age):
             age = age_avg
         age = (age - age_min) / (age_max - age_min)
         out["age"] = torch.tensor([age]).float()
-        
+
         if item["family_history"] is True:
             out["family_history"] = torch.tensor(1).long()
         elif item["family_history"] is False:
@@ -146,16 +172,17 @@ class BModeDataFactoryV1(DataFactory):
         self,
         fold: int = 0,
         n_folds: int = 5,
-        test_center: str | None = None,
+        test_center: str = None,
         undersample_benign_ratio: float = 3.0,
         min_involvement_train: float = 40,
         remove_benign_cores_from_positive_patients: bool = True,
         batch_size: int = 1,
         image_size: int = 1024,
         augmentations: str = "none",
+        labeled: bool = True,
     ):
-        from medAI.datasets.nct2013.cohort_selection import select_cohort
         from medAI.datasets.nct2013.bmode_dataset import BModeDatasetV1
+        from medAI.datasets.nct2013.cohort_selection import select_cohort
 
         train_cores, val_cores, test_cores = select_cohort(
             fold=fold,
@@ -164,17 +191,22 @@ class BModeDataFactoryV1(DataFactory):
             undersample_benign_ratio=undersample_benign_ratio,
             involvement_threshold_pct=min_involvement_train,
             exclude_benign_cores_from_positive_patients=remove_benign_cores_from_positive_patients,
-            splits_file = "/ssd005/projects/exactvu_pca/nct2013/patient_splits.csv"
+            splits_file="/ssd005/projects/exactvu_pca/nct2013/patient_splits.csv",
         )
 
-        self.train_transform = TransformV1(augment=augmentations, image_size=image_size)
-        self.val_transform = TransformV1(augment="none", image_size=image_size)
+        self.train_transform = TransformV1(
+            augment=augmentations, image_size=image_size, labeled=labeled
+        )
+        self.val_transform = TransformV1(
+            augment="none", image_size=image_size, labeled=labeled
+        )
 
         self.train_dataset = BModeDatasetV1(train_cores, self.train_transform)
         self.val_dataset = BModeDatasetV1(val_cores, self.val_transform)
         self.test_dataset = BModeDatasetV1(test_cores, self.val_transform)
 
         self.batch_size = batch_size
+        self.labeled = labeled
 
     def train_loader(self):
         return DataLoader(
@@ -205,7 +237,9 @@ class BModeDataFactoryV1(DataFactory):
 
 
 class AlignedFilesSegmentationDataFactory(DataFactory):
-    def __init__(self, batch_size: int = 1, image_size: int = 1024, augmentations="none"):
+    def __init__(
+        self, batch_size: int = 1, image_size: int = 1024, augmentations="none"
+    ):
         from medAI.datasets import AlignedFilesDataset
 
         self.train_dataset = AlignedFilesDataset(
@@ -222,10 +256,10 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
         self.augmentations = augmentations
         self.image_size = image_size
 
-    def transform(self, item, augmentations="none"): 
+    def transform(self, item, augmentations="none"):
         out = {}
 
-        bmode = item['image']
+        bmode = item["image"]
         bmode = np.flip(bmode, axis=0).copy()
         bmode = torch.from_numpy(bmode) / 255.0
         bmode = bmode.unsqueeze(0)
@@ -234,7 +268,7 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
         bmode = bmode.repeat(3, 1, 1)
         bmode = Image(bmode)
 
-        prostate_mask = item['mask']
+        prostate_mask = item["mask"]
         prostate_mask = np.flip(prostate_mask, axis=0).copy()
         prostate_mask = torch.from_numpy(prostate_mask) / 255.0
         prostate_mask = prostate_mask.unsqueeze(0)
@@ -262,24 +296,15 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
         out["bmode"] = bmode
         out["needle_mask"] = needle_mask
         out["prostate_mask"] = prostate_mask
-
-        out["label"] = torch.tensor(-1).long()
-        out["involvement"] = torch.tensor(0).float()
-        out["psa"] = torch.tensor(-1).float()
-        out["age"] = torch.tensor(-1).float()
-        out["family_history"] = torch.tensor(False).bool()
-        out["center"] = 'UCLA'
-        out["loc"] = 'UNKNOWN'
-        out["all_cores_benign"] = torch.tensor(False).bool()
         out["dataset_name"] = "aligned_files"
 
         return out
 
     def train_transform(self, item):
         return self.transform(item, augmentations=self.augmentations)
-    
+
     def val_transform(self, item):
-        return self.transform(item, augmentations='none')
+        return self.transform(item, augmentations="none")
 
     def train_loader(self):
         return DataLoader(
@@ -289,7 +314,7 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
             num_workers=8,
             pin_memory=True,
         )
-    
+
     def val_loader(self):
         return DataLoader(
             self.val_dataset,
@@ -298,7 +323,7 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
             num_workers=8,
             pin_memory=True,
         )
-    
+
     def test_loader(self):
         return DataLoader(
             self.test_dataset,
@@ -307,6 +332,48 @@ class AlignedFilesSegmentationDataFactory(DataFactory):
             num_workers=8,
             pin_memory=True,
         )
+
+
+class UASweepsDataFactory(DataFactory):
+    """Data factory for UASweeps dataset, which are unlabeled BMode images"""
+
+    def __init__(self, batch_size: int = 1, image_size: int = 1024):
+        from medAI.datasets.ua_unlabeled import UAUnlabeledImages
+
+        self.dataset = UAUnlabeledImages(
+            root="/ssd005/projects/exactvu_pca/UA_extracted_data",
+            transform=self.transform,
+        )
+
+        self.batch_size = batch_size
+        self.image_size = image_size
+
+    def transform(self, item):
+        bmode = item["bmode"]
+        bmode = np.flip(bmode, axis=0).copy()
+        bmode = torch.from_numpy(bmode) / 255.0
+        bmode = bmode.unsqueeze(0)
+        bmode = T.Resize((self.image_size, self.image_size), antialias=True)(bmode)
+        bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
+        bmode = bmode.repeat(3, 1, 1)
+        bmode = Image(bmode)
+
+        return {"bmode": bmode}
+
+    def train_loader(self):
+        return DataLoader(
+            self.dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=8,
+            pin_memory=True,
+        )
+
+    def val_loader(self):
+        return None
+
+    def test_loader(self):
+        return None
 
 
 def dataloaders(
@@ -318,12 +385,12 @@ def dataloaders(
 ):
     from medAI.datasets import (
         AlignedFilesDataset,
-        ExactNCT2013BmodeImagesWithManualProstateSegmentation,
         CohortSelectionOptions,
+        ExactNCT2013BmodeImagesWithManualProstateSegmentation,
     )
-    from torchvision.transforms import v2 as T
-    from torchvision.tv_tensors import Mask, Image
     from torchvision.transforms import InterpolationMode
+    from torchvision.transforms import v2 as T
+    from torchvision.tv_tensors import Image, Mask
 
     class AlignedFilesTransform:
         """Transforms for the aligned files dataset"""
@@ -407,7 +474,9 @@ def dataloaders(
             ExactNCT2013BmodeImagesWithManualProstateSegmentation(
                 split="train",
                 transform=NCTTransform(augment=True),
-                cohort_selection_options=CohortSelectionOptions(fold=fold, n_folds=num_folds),
+                cohort_selection_options=CohortSelectionOptions(
+                    fold=fold, n_folds=num_folds
+                ),
             )
         )
     train_ds = torch.utils.data.ConcatDataset(train_datasets)
@@ -422,15 +491,15 @@ def dataloaders(
         test_datasets["nct"] = ExactNCT2013BmodeImagesWithManualProstateSegmentation(
             split="test",
             transform=NCTTransform(augment=False),
-            cohort_selection_options=CohortSelectionOptions(fold=fold, n_folds=num_folds),
+            cohort_selection_options=CohortSelectionOptions(
+                fold=fold, n_folds=num_folds
+            ),
         )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=4
     )
     test_loaders = {
-        name: DataLoader(
-            test_ds, batch_size=batch_size, shuffle=False, num_workers=4
-        )
+        name: DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=4)
         for name, test_ds in test_datasets.items()
     }
     return train_loader, test_loaders
