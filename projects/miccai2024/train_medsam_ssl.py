@@ -1,28 +1,33 @@
-import torch
-from torch import nn
-from segment_anything.modeling.common import LayerNorm2d
-from medAI.utils.masking_generator import MaskingGenerator
-from copy import deepcopy
-import wandb
-from tqdm import tqdm
-from pathlib import Path
-from medAI.utils.lr_scheduler import LinearWarmupCosineAnnealingLR
-import os
-from rich_argparse import RichHelpFormatter, ArgumentDefaultsRichHelpFormatter
-import typing as tp
+raise DeprecationWarning(
+    f'Please use "train_medsam_ibot_style.py" instead of "train_medsam_ssl.py"'
+)
+
+
 import logging
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
-import einops
-import matplotlib.pyplot as plt
+import os
 import typing as tp
-from simple_parsing import ArgumentParser, subgroups
-from einops.layers.torch import Rearrange
+from abc import ABC, abstractmethod
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+
+import einops
 import hydra
+import matplotlib.pyplot as plt
+import torch
+from einops.layers.torch import Rearrange
+from medAI.utils.lr_scheduler import LinearWarmupCosineAnnealingLR
+from medAI.utils.masking_generator import MaskingGenerator
 from omegaconf import OmegaConf
+from rich_argparse import ArgumentDefaultsRichHelpFormatter, RichHelpFormatter
+from segment_anything.modeling.common import LayerNorm2d
+from simple_parsing import ArgumentParser, subgroups
+from torch import nn
+from tqdm import tqdm
+
+import wandb
 from src.data_factory import BModeDataFactoryV1
 from train_medsam import Experiment
-
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -38,7 +43,6 @@ class SSLExperiment(Experiment):
             return  # ssl is only for training
 
         for i, batch in enumerate(tqdm(loader, desc=desc)):
-            
             log_image_every = self.config.get("log_image_every", 100)
             if i % log_image_every == 0:
                 # show some examples of features PCA as a sanity check
@@ -56,16 +60,16 @@ class SSLExperiment(Experiment):
             self.optimizer.zero_grad()
             bmode_image = batch["bmode"].to(self.config.device)
             loss = self.model(bmode_image)
-            
+
             # don't backpropagate if the loss is NaN
             if not torch.isnan(loss):
                 loss.backward()
                 torch.nn.utils.clip_grad_value_(self.model.parameters(), 1.0)
-                
+
                 if i % self.config.accumulate_grad_steps == 0:
                     self.optimizer.step()
                     self.model.on_train_step_end()
-            else: 
+            else:
                 logging.error("WARNING: loss is NaN")
 
             self.scheduler.step()
