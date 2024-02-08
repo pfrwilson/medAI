@@ -169,4 +169,5 @@ pyrightconfig.json
 
 **/outputs/**
 **/multirun/**
+**/experiments/**
 ```
