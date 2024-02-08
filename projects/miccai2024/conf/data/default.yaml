@@ -1,8 +1,0 @@
-# fold: 0
-# n_folds: 5
-test_center: UVA
-undersample_benign_ratio: 3
-min_involvement_train: 40
-batch_size: 1
-image_size: 1024
-augmentations: translate
