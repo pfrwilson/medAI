@@ -37,6 +37,9 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
+# Avoids too many open files error from multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 @dataclass
 class EnsembleConfig(BaselineConfig):
     """Configuration for the experiment."""
@@ -129,12 +132,87 @@ class Ensemblexperiment(BaselineExperiment):
         logging.info(f"""Trainable parameters: 
                      {self.config.num_ensembles*sum(p.numel() for p in self.list_models[0].parameters() if p.requires_grad)}""")
 
+    def setup_data(self):
+        from torchvision.transforms import InterpolationMode
+        from torchvision.transforms import v2 as T
+        # from torchvision.datapoints import Image as TVImage
+        from torchvision.tv_tensors import Image as TVImage
+                
+        class Transform:
+            def __init__(selfT, augment=False):
+                selfT.augment = augment
+                selfT.size = (256, 256)
+            
+            def __call__(selfT, item):
+                patch = item.pop("patch")
+                patch = copy(patch)
+                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                    if self.config.instance_norm else patch
+                patch = TVImage(patch)
+                # patch = T.ToImage()(patch)
+                # patch = T.ToTensor()(patch)
+                patch = T.Resize(selfT.size, antialias=True)(patch).float()
+                
+                
+                if selfT.augment:
+                    # Augment support patches
+                    transform = T.Compose([
+                        T.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                        T.RandomHorizontalFlip(p=0.5),
+                        T.RandomVerticalFlip(p=0.5),
+                    ])  
+                    patch = transform(patch)
+                
+                label = torch.tensor(item["grade"] != "Benign").long()
+                return patch, label, item
+
+
+        cohort_selection_options_train = copy(self.config.cohort_selection_config)
+        cohort_selection_options_train.min_involvement = self.config.min_involvement_train
+        cohort_selection_options_train.benign_to_cancer_ratio = self.config.benign_to_cancer_ratio_train
+        cohort_selection_options_train.remove_benign_from_positive_patients = self.config.remove_benign_from_positive_patients_train
+            
+        train_ds = ExactNCT2013RFImagePatches(
+            split="train",
+            transform=Transform(augment=False),
+            cohort_selection_options=cohort_selection_options_train,
+            patch_options=self.config.patch_config,
+            debug=self.config.debug,
+        )
+        
+        val_ds = ExactNCT2013RFImagePatches(
+            split="val",
+            transform=Transform(),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
+            debug=self.config.debug,
+        )
+                
+        test_ds = ExactNCT2013RFImagePatches(
+            split="test",
+            transform=Transform(),
+            cohort_selection_options=self.config.cohort_selection_config,
+            patch_options=self.config.patch_config,
+            debug=self.config.debug,
+        )
+
+
+        self.train_loader = DataLoader(
+            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4, pin_memory=True
+        )
+        self.val_loader = DataLoader(
+            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4, pin_memory=True
+        )
+        self.test_loader = DataLoader(
+            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4, pin_memory=True
+        )        
+    
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
                 # "param_buffer_data": self._get_param_buffer_data() if save_model else None,
-                "list_models": [model.state_dict() for model in self.list_models]\
-                    if save_model else None,
+                "list_models": [model.state_dict() for model in self.list_models], #\
+                    # if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,

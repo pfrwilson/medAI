@@ -1,10 +1,10 @@
 # # ensemble experiment
-# NUM_ENSEMBLES=10
-# INSTANCE_NORM=True
-# USE_BATCH_NORM=True
-# GROUP="ensemble_bn_${NUM_ENSEMBLES}mdls_inst-nrm_loco"
+# NUM_ENSEMBLES=5
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# GROUP="ensemble_${NUM_ENSEMBLES}mdls_gn_3ratio_loco"
 
-# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
+# for CENTER in  "UVA" #"CRCEO" # "JH" "PCC" "PMCC" 
 # do
 #     python ensemble_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -15,7 +15,8 @@
 #         --cohort_selection_config "loco" \
 #         --leave_out $CENTER \
 #         --instance_norm $INSTANCE_NORM \
-#         --use_batch_norm $USE_BATCH_NORM        
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --benign_to_cancer_ratio_train 3.0       
 # done 
 
 
@@ -40,26 +41,29 @@
 # done 
 
 
-# # baseline experiment
-# INSTANCE_NORM=False
-# USE_BATCH_NORM=False
-# GROUP="baseline_gn_loco2"
-# # GROUP="sam_baseline_gn_e-4rho_loco"
-# # GROUP="baseline_bn_inst-nrm_loco"
+# baseline experiment
+INSTANCE_NORM=True
+USE_BATCH_NORM=False
+GROUP="baseline_gn_crtd3ratio_loco"
+# GROUP="sam_baseline_gn_e-4rho_loco"
+# GROUP="baseline_bn_inst-nrm_loco"
 
-# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"
-# do
-#     python baseline_experiment.py \
-#         --name "${GROUP}_${CENTER}" \
-#         --group "${GROUP}" \
-#         --cluster "slurm" \
-#         --slurm_gres "gpu:a40:1" \
-#         --cohort_selection_config "loco" \
-#         --leave_out $CENTER \
-#         --instance_norm $INSTANCE_NORM \
-#         --use_batch_norm $USE_BATCH_NORM \
-#         --lr 0.0001
-# done
+for CENTER in  "JH" "PCC" "PMCC" # "UVA" "CRCEO" 
+do
+    python baseline_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
+        --slurm_gres "gpu:a40:1" \
+        --cluster "slurm" \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --instance_norm $INSTANCE_NORM \
+        --use_batch_norm $USE_BATCH_NORM \
+        --benign_to_cancer_ratio_train 3.0 \
+        --use_poly1_loss False \
+        --eps 1.0 \
+        --lr 0.0001
+done
 
 
 
@@ -111,8 +115,8 @@
 # # vicreg pretrain experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_pretrn_1024zdim_gn_300ep_loco"
-# for CENTER in "PMCC" "UVA" "CRCEO" # "JH" "PCC" 
+# GROUP="vicreg_pretrn_1024zdim_gn_300ep_3ratio_loco"
+# for CENTER in "PCC" # "PMCC" # "UVA" "CRCEO" "JH"     
 # do
 #     python vicreg_pretrain_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -123,8 +127,9 @@
 #         --leave_out $CENTER \
 #         --instance_norm $INSTANCE_NORM \
 #         --use_batch_norm $USE_BATCH_NORM \
+#         --benign_to_cancer_ratio_train 3.0 \
 #         --epochs 300 \
-#         --proj_output_dim 2048 \
+#         --proj_output_dim 1024 \
 #         --cov_coeff 1.0 \
 #         --linear_lr 0.001 \
 #         --linear_epochs 15
@@ -154,12 +159,12 @@
 # # vicreg finetune core experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_1024-300finetune_-4lr_8heads_64qkv_8corebz_gn_loco"
+# GROUP="vicreg_1024-300finetune_-4lr_8heads_64qk128v_8corebz_gn_loco"
 # # GROUP="vicreg_finetune_1e-4backlr_1e-4headlr_8heads_transformer_gn_loco_batch10_newrunep"
 # checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
 # # checkpoint_path_name="vicreg_pretrn_2048zdim_gn_300ep_loco"
 # # --group "${GROUP}" \
-# for CENTER in "JH" # "PCC" # "PMCC" "UVA" "CRCEO" 
+# for CENTER in "JH" "PCC" # "PMCC" "UVA" "CRCEO" 
 # do
 #     python core_finetune_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -170,13 +175,13 @@
 #         --instance_norm $INSTANCE_NORM \
 #         --use_batch_norm $USE_BATCH_NORM \
 #         --epochs 50 \
-#         --core_batch_size 1 \
+#         --core_batch_size 8 \
 #         --nhead 8 \
 #         --qk_dim 64 \
-#         --v_dim 64 \
+#         --v_dim 128 \
 #         --checkpoint_path_name $checkpoint_path_name \
 #         --backbone_lr 0.0001 \
-#         --head_lr 0.0001 \
+#         --head_lr 0.0005 \
 #         --batch_size 1 \
 #         --dropout 0.0 \
 #         # --prostate_mask_threshold -1
@@ -208,24 +213,26 @@
 # done
 
 
-# Divemble experiment
-NUM_ENSEMBLES=10
-INSTANCE_NORM=False
-USE_BATCH_NORM=False
-GROUP="Divemble_gn_${NUM_ENSEMBLES}mdls_.5var.0cov_crctd_loco"
-for CENTER in "JH" #"PCC" # "PMCC" # "UVA" "CRCEO"
-do
-    python divemble_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
-        --num_ensembles $NUM_ENSEMBLES \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM \
-        --epochs 50 \
-        --var_reg 0.5 \
-        --cov_reg 0.0
-done
+# # Divemble experiment
+# NUM_ENSEMBLES=5
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# GROUP="Divemble-shrd_gn_${NUM_ENSEMBLES}mdls_0var0.5cov_3ratio_loco"
+# # GROUP="Divemble_gn_${NUM_ENSEMBLES}mdls_crctd_loco"
+# for CENTER in "PCC" "PMCC" # "UVA" "CRCEO"
+# do
+#     python divemble_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --num_ensembles $NUM_ENSEMBLES \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --epochs 50 \
+#         --benign_to_cancer_ratio_train 3.0 \
+#         --var_reg 0.0 \
+#         --cov_reg 0.5
+# done

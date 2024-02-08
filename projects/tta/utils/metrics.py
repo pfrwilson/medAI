@@ -97,7 +97,7 @@ class MetricCalculator(object):
             ids = core_ids
         
         if self.avg_core_probs_first:
-            probs = torch.cat(
+            probs = torch.stack(
                 [torch.stack(probs_list).mean(dim=0) for id, probs_list in self.core_id_probs.items() if id in ids])          
         else:
             probs = torch.stack(

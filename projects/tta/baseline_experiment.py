@@ -37,9 +37,11 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
+from utils.poly_loss import Poly1CrossEntropyLoss
 
-# # Avoids too many open files error from multiprocessing
-# torch.multiprocessing.set_sharing_strategy('file_system')
+
+# Avoids too many open files error from multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 @dataclass 
@@ -63,7 +65,6 @@ class FeatureExtractorConfig:
         if self.model_name not in valid_models:
             raise ValueError(f"'{self.model_name}' is not a valid model. Choose from timm.list_models(): {valid_models}")
         
-
 @dataclass
 class OptimizerConfig:
     opt: str = 'adam'
@@ -78,6 +79,10 @@ class SAMOptimizerConfig:
     rho: float = 0.05
     momentum: float = 0.9
 
+@dataclass
+class Poly1LossConfig:
+    use_poly1_loss: bool = False
+    eps: float = 1.0
 
 @dataclass
 class BaselineConfig(BasicExperimentConfig):
@@ -113,8 +118,11 @@ class BaselineConfig(BasicExperimentConfig):
         {"regular": OptimizerConfig, "sam": SAMOptimizerConfig},
         default="regular"
     )
+    
     fourier_transform_config: FourierTransformConfig = FourierTransformConfig()
     
+    poly1_loss_config: Poly1LossConfig = Poly1LossConfig()
+        
         
 class BaselineExperiment(BasicExperiment): 
     config_class = BaselineConfig
@@ -200,8 +208,9 @@ class BaselineExperiment(BasicExperiment):
             def __call__(selfT, item):
                 patch = item.pop("patch")
                 patch = copy(patch)
-                patch = (patch - patch.min()) / (patch.max() - patch.min()) \
-                    if self.config.instance_norm else patch
+                patch = (patch - patch.mean()) / patch.std() if self.config.instance_norm else patch 
+                # patch = (patch - patch.min()) / (patch.max() - patch.min()) \
+                #     if self.config.instance_norm else patch
                 patch = TVImage(patch)
                 # patch = T.ToImage()(patch)
                 # patch = T.ToTensor()(patch)
@@ -252,13 +261,13 @@ class BaselineExperiment(BasicExperiment):
 
 
         self.train_loader = DataLoader(
-            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4
+            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4, pin_memory=True
         )
         self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4, pin_memory=True
         )
         self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4
+            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4, pin_memory=True
         )
         
     def setup_metrics(self):
@@ -339,7 +348,10 @@ class BaselineExperiment(BasicExperiment):
         with torch.no_grad() if not train else torch.enable_grad():
             self.model.train() if train else self.model.eval()
             
-            criterion = nn.CrossEntropyLoss()
+            criterion = nn.CrossEntropyLoss() if not self.config.poly1_loss_config.use_poly1_loss else Poly1CrossEntropyLoss(
+                num_classes=self.config.model_config.num_classes,
+                epsilon=self.config.poly1_loss_config.eps
+            )
             
             for i, batch in enumerate(tqdm(loader, desc=desc)):
                 batch = deepcopy(batch)
@@ -354,7 +366,7 @@ class BaselineExperiment(BasicExperiment):
                 logits = self.model(images)
                 
                 loss = criterion(logits, labels)
-                
+                                
                 # Optimizer step
                 if train:
                     loss.backward() 

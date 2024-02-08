@@ -42,8 +42,8 @@ from timm.layers import create_classifier
 from models.linear_prob import LinearProb
  
  
-# # Avoids too many open files error from multiprocessing
-# torch.multiprocessing.set_sharing_strategy('file_system')
+# Avoids too many open files error from multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 @dataclass
 class VicregConfig:
@@ -192,13 +192,13 @@ class VicregPretrainExperiment(BaselineExperiment):
 
 
         self.train_loader = DataLoader(
-            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4 #, pin_memory=True
+            train_ds, batch_size=self.config.batch_size, shuffle=True, num_workers=4 , pin_memory=True
         )
         self.val_loader = DataLoader(
-            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 #, pin_memory=True
+            val_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 , pin_memory=True
         )
         self.test_loader = DataLoader(
-            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 #, pin_memory=True
+            test_ds, batch_size=self.config.batch_size, shuffle=False, num_workers=4 , pin_memory=True
         )
 
     def setup_model(self):

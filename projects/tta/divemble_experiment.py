@@ -112,8 +112,9 @@ class Divemblexperiment(BaselineExperiment):
         params = []
         for model in self.list_fe_models:
             params.append({'params': model.parameters()})
-        for linear in self.list_linears:
-            params.append({'params': linear.parameters()})
+        # for linear in self.list_linears:
+        #     params.append({'params': linear.parameters()})
+        params.append({'params': self.shared_linear.parameters()})
         
         self.optimizer = optim.Adam(
             params,
@@ -166,10 +167,10 @@ class Divemblexperiment(BaselineExperiment):
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
-                "list_fe_models": [fe_model.state_dict() for fe_model in self.list_fe_models]\
-                    if save_model else None,
-                "list_linears": [linear.state_dict() for linear in self.list_linears]\
-                    if save_model else None,
+                "list_fe_models": [fe_model.state_dict() for fe_model in self.list_fe_models], #\
+                    #if save_model else None,
+                "list_linears": [linear.state_dict() for linear in self.list_linears], #\
+                    # if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
@@ -201,8 +202,11 @@ class Divemblexperiment(BaselineExperiment):
         fe_models = [nn.Sequential(TimmFeatureExtractorWrapper(model), global_pool) 
                      for model, global_pool in zip(models, global_pools)]
         
-        linears = [nn.Linear(512, self.config.model_config.num_classes).cuda()
-                   for _ in range(self.config.num_ensembles)]
+        # linears = [nn.Linear(512, self.config.model_config.num_classes).cuda()
+                #    for _ in range(self.config.num_ensembles)]
+            
+        self.shared_linear = nn.Linear(512, self.config.model_config.num_classes).cuda()
+        linears = [self.shared_linear for _ in range(self.config.num_ensembles)]
             
         return fe_models, linears
 
@@ -233,7 +237,7 @@ class Divemblexperiment(BaselineExperiment):
                 loss = sum(ce_losses) + diversity_loss                
 
                 # Optimizer step
-                if train:             
+                if train:
                     self.optimizer.zero_grad()      
                     loss.backward()
                     self.optimizer.step()
