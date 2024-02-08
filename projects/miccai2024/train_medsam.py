@@ -1,97 +1,118 @@
+import logging
+import os
+import typing as tp
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+
 import hydra
+import medAI
+import numpy as np
 import torch
 import torch.nn as nn
-import os
-from dataclasses import dataclass
-from src.data_factory import BModeDataFactoryV1, AlignedFilesSegmentationDataFactory
-from matplotlib import pyplot as plt
-import medAI
-from torch import optim
-import logging
-from tqdm import tqdm
-import wandb
-import numpy as np
-from abc import ABC, abstractmethod
 from einops import rearrange, repeat
-
-# from src.masked_prediction_module import MaskedPredictionModule
+from matplotlib import pyplot as plt
+from medAI.metrics import dice_loss, dice_score
 from medAI.modeling.sam import MedSAMForFinetuning, build_medsam
-from omegaconf import OmegaConf
 from medAI.utils.reproducibiliy import (
-    set_global_seed,
     get_all_rng_states,
     set_all_rng_states,
+    set_global_seed,
 )
+from omegaconf import OmegaConf
+from simple_parsing import choice
+from torch import optim
+from torch.nn import functional as F
+from tqdm import tqdm
+
+import wandb
+from src.data_factory import AlignedFilesSegmentationDataFactory, BModeDataFactoryV1
 
 
-@hydra.main(config_path="conf", config_name="train_medsam")
-def main(cfg):
-    exp = Experiment(cfg)
-    exp.run()
+@dataclass
+class Args:
+    fold: int | None = None
+    n_folds: int | None = None
+    test_center: str = "UVA"
+    undersample_benign_ratio: float | None = 3.0
+    min_involvement_train: float | None = 0.0
+    batch_size: int = 1
+    image_size: int = 1024
+    augmentations: str = "translate"
+    remove_benign_cores_from_positive_patients: bool = False
 
+    optimizer: str = "adamw"
+    lr: float = 1e-5
+    encoder_lr: float = 1e-5
+    warmup_lr: float = 1e-4
+    warmup_epochs: int = 5
+    wd: float = 0
+    epochs: int = 30
+    test_every_epoch: bool = True
 
-def involvement_tolerant_loss(patch_logits, patch_labels, core_indices, involvement):
-    batch_size = len(involvement)
-    loss = torch.tensor(0, dtype=torch.float32, device=patch_logits.device)
-    for i in range(batch_size):
-        patch_logits_for_core = patch_logits[core_indices == i]
-        patch_labels_for_core = patch_labels[core_indices == i]
-        involvement_for_core = involvement[i]
-        if patch_labels_for_core[0].item() == 0:
-            # core is benign, so label noise is assumed to be low
-            loss += nn.functional.binary_cross_entropy_with_logits(
-                patch_logits_for_core, patch_labels_for_core
-            )
-        elif involvement_for_core.item() > 0.65:
-            # core is high involvement, so label noise is assumed to be low
-            loss += nn.functional.binary_cross_entropy_with_logits(
-                patch_logits_for_core, patch_labels_for_core
-            )
-        else:
-            # core is of intermediate involvement, so label noise is assumed to be high.
-            # we should be tolerant of the model's "false positives" in this case.
-            pred_index_sorted_by_cancer_score = torch.argsort(
-                patch_logits_for_core[:, 0], descending=True
-            )
-            patch_logits_for_core = patch_logits_for_core[
-                pred_index_sorted_by_cancer_score
-            ]
-            patch_labels_for_core = patch_labels_for_core[
-                pred_index_sorted_by_cancer_score
-            ]
-            n_predictions = patch_logits_for_core.shape[0]
-            patch_predictions_for_core_for_loss = patch_logits_for_core[
-                : int(n_predictions * involvement_for_core.item())
-            ]
-            patch_labels_for_core_for_loss = patch_labels_for_core[
-                : int(n_predictions * involvement_for_core.item())
-            ]
-            loss += nn.functional.binary_cross_entropy_with_logits(
-                patch_predictions_for_core_for_loss,
-                patch_labels_for_core_for_loss,
-            )
+    prompts: list[str] = field(
+        default_factory=lambda: ["task", "anatomical", "psa", "age", "family_history"]
+    )
+    prompt_dropout: float = 0.0
+
+    base_loss: str = choice(["ce", "gce", "mae"], default="ce")
+    """The base loss function that will be applied inside the valid loss region of the heatmap."""
+    base_loss_prostate_mask: bool = True
+    """If True, the base loss will only be applied inside the prostate mask."""
+    base_loss_needle_mask: bool = True
+    """If True, the base loss will only be applied inside the needle mask."""
+    loss_pos_weight: float = 1.0
+    """The positive class weight for the base loss function."""
+    valid_loss_region_mode: tp.Literal["hard", "soft"] = "hard"
+    """The mode for defining the valid loss region. If 'hard', the valid loss pixels are selected from the valid loss region. 
+    If 'soft', the valid loss region is blurred and resized to the heatmap size, and the loss is weighted by this mask."""
+    use_loss_mil: bool = False
+    loss_mil_loss_weight: float = 0.0
+    loss_top_percentile: float = 0.2
+
+    device: str = "cuda"
+    accumulate_grad_steps: int = 8
+
+    exp_dir: str | None = None
+    checkpoint_dir: str | None = None
+
+    project: str = "miccai2024"
+    group: str | None = None
+    name: str | None = None
+
+    log_images: bool = False
+    encoder_weights_path: str | None = None
+    encoder_load_mode: tp.Literal[
+        "dino_medsam", "ibot_medsam", "image_encoder", "none"
+    ] = "none"
+    seed: int = 42
+    use_amp: bool = True
 
 
 class Experiment:
-    def __init__(self, config):
+    def __init__(self, config: Args):
         self.config = config
 
     def setup(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+            handlers=[logging.StreamHandler()],
+        )
         logging.info("Setting up experiment")
-        logging.info("Running in directory: " + os.getcwd())
+        os.makedirs(self.config.exp_dir, exist_ok=True)
+        logging.info("Running in directory: " + self.config.exp_dir)
 
         wandb.init(
-            **self.config.wandb,
-            config=OmegaConf.to_container(self.config, resolve=True),
-            dir=hydra.utils.get_original_cwd(),
+            project=self.config.project,
+            group=self.config.group,
+            name=self.config.name,
+            config=self.config,
         )
         logging.info("Wandb initialized")
         logging.info("Wandb url: " + wandb.run.url)
-        # for reproducibility, save full hydra config
-        wandb.save(".hydra/**")
 
-        self.exp_state_path = self.config.get("exp_state_path", None) or os.path.join(
-            os.getcwd(), "experiment_state.pth"
+        self.exp_state_path = os.path.join(
+            self.config.checkpoint_dir, "experiment_state.pth"
         )
         if os.path.exists(self.exp_state_path):
             logging.info("Loading experiment state from experiment_state.pth")
@@ -100,7 +121,7 @@ class Experiment:
             logging.info("No experiment state found - starting from scratch")
             self.state = None
 
-        set_global_seed(self.config.get("seed", 42))
+        set_global_seed(self.config.seed)
 
         # logging setup
         self.setup_data()
@@ -117,6 +138,8 @@ class Experiment:
             self.scheduler.load_state_dict(self.state["scheduler"])
 
         self.gradient_scaler = torch.cuda.amp.GradScaler()
+        if self.state is not None:
+            self.gradient_scaler.load_state_dict(self.state["gradient_scaler"])
 
         self.epoch = 0 if self.state is None else self.state["epoch"]
         logging.info(f"Starting at epoch {self.epoch}")
@@ -130,25 +153,30 @@ class Experiment:
         logging.info("Setting up model")
         self.model = MedSAMWithPCAPrompts(
             n_tasks=1,
-            use_task_prompt=self.config.use_task_prompt,
-            use_anatomical_prompt=self.config.use_anatomical_prompt,
-            use_metadata_prompt=self.config.use_metadata_prompt,
+            prompts=self.config.prompts,
+            prompt_dropout=self.config.prompt_dropout,
         )
-        if self.config.encoder_weights_path is not None:
-            self.model.medsam_model.image_encoder.load_state_dict(
-                torch.load(self.config.encoder_weights_path)
+        if self.config.encoder_weights_path:
+            load_encoder_weights(
+                self.model.medsam_model.image_encoder,
+                self.config.encoder_weights_path,
+                self.config.encoder_load_mode,
             )
+
+            # self.model.medsam_model.image_encoder.load_state_dict(
+            #     torch.load(self.config.encoder_weights_path)
+            # )
         self.model.to(self.config.device)
         torch.compile(self.model)
-        self.model.freeze_backbone() # freeze backbone for first few epochs
+        self.model.freeze_backbone()  # freeze backbone for first few epochs
 
     def setup_optimizer(self):
+        if self.config.wd > 0:
+            raise NotImplementedError("Weight decay not implemented yet")
         match self.config.optimizer:
-            case "adam":
-                opt_factory = lambda parameters, lr: optim.Adam(
-                    parameters,
-                    lr=lr,
-                    weight_decay=self.config.wd,
+            case "adamw":
+                opt_factory = lambda parameters, lr: optim.AdamW(
+                    parameters, lr=lr, weight_decay=0
                 )
             case "sgdw":
                 opt_factory = lambda parameters, lr: optim.SGD(
@@ -156,6 +184,10 @@ class Experiment:
                     lr=lr,
                     momentum=0.9,
                     weight_decay=self.config.wd,
+                )
+            case _:
+                raise ValueError(
+                    f"Unknown optimizer: {self.config.optimizer}. Options are 'adamw' and 'sgdw'"
                 )
 
         params = [
@@ -182,7 +214,17 @@ class Experiment:
 
     def setup_data(self):
         logging.info("Setting up data")
-        data_factory = BModeDataFactoryV1(**self.config.data)
+        data_factory = BModeDataFactoryV1(
+            fold=self.config.fold,
+            n_folds=self.config.n_folds,
+            test_center=self.config.test_center,
+            undersample_benign_ratio=self.config.undersample_benign_ratio,
+            min_involvement_train=self.config.min_involvement_train,
+            batch_size=self.config.batch_size,
+            image_size=self.config.image_size,
+            augmentations=self.config.augmentations,
+            remove_benign_cores_from_positive_patients=self.config.remove_benign_cores_from_positive_patients,
+        )
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
         self.test_loader = data_factory.test_loader()
@@ -198,24 +240,16 @@ class Experiment:
         val_core_ids = self.val_loader.dataset.core_ids
         test_core_ids = self.test_loader.dataset.core_ids
 
-        with open("train_core_ids.txt", "w") as f:
+        with open(os.path.join(self.config.exp_dir, "train_core_ids.txt"), "w") as f:
             f.write("\n".join(train_core_ids))
-        with open("val_core_ids.txt", "w") as f:
+        with open(os.path.join(self.config.exp_dir, "val_core_ids.txt"), "w") as f:
             f.write("\n".join(val_core_ids))
-        with open("test_core_ids.txt", "w") as f:
+        with open(os.path.join(self.config.exp_dir, "test_core_ids.txt"), "w") as f:
             f.write("\n".join(test_core_ids))
 
-        wandb.save("train_core_ids.txt")
-        wandb.save("val_core_ids.txt")
-        wandb.save("test_core_ids.txt")
-
-        if self.config.get("segmentation_data", None) is not None:
-            data_factory_segmentation = AlignedFilesSegmentationDataFactory(
-                **self.config.segmentation_data
-            )
-            self.train_loader_segmentation = data_factory_segmentation.train_loader()
-            self.val_loader_segmentation = data_factory_segmentation.val_loader()
-            self.test_loader_segmentation = data_factory_segmentation.test_loader()
+        wandb.save(os.path.join(self.config.exp_dir, "train_core_ids.txt"))
+        wandb.save(os.path.join(self.config.exp_dir, "val_core_ids.txt"))
+        wandb.save(os.path.join(self.config.exp_dir, "test_core_ids.txt"))
 
     def run(self):
         self.setup()
@@ -237,7 +271,7 @@ class Experiment:
                 self.best_score = tracked_metric
                 logging.info(f"New best score: {self.best_score}")
 
-            if new_record or self.config.get("test_every_epoch", False):
+            if new_record or self.config.test_every_epoch:
                 self.training = False
                 logging.info("Running test set")
                 metrics = self.run_eval_epoch(self.test_loader, desc="test")
@@ -262,42 +296,129 @@ class Experiment:
         anatomical_location = batch["loc"].to(self.config.device)
         all_cores_benign = batch["all_cores_benign"].to(self.config.device)
         B = len(bmode)
-        task_id=torch.zeros(B, dtype=torch.long, device=bmode.device)
+        task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
 
         with torch.cuda.amp.autocast():
             heatmap_logits = self.model(
-                bmode, 
+                bmode,
                 task_id=task_id,
                 anatomical_location=anatomical_location,
                 psa=psa,
                 age=age,
                 family_history=family_history,
+                prostate_mask=prostate_mask,
             )
 
             if torch.any(torch.isnan(heatmap_logits)):
                 logging.warning("NaNs in heatmap logits")
                 breakpoint()
 
+            # loss = torch.tensor(0,
+            #                     dtype=torch.float32,
+            #                     device=heatmap_logits.device)
+            # # base loss component
+            # masks = []
+            # for i in range(len(heatmap_logits)):
+            #     mask = torch.ones(prostate_mask[i].shape,
+            #                       device=prostate_mask[i].device).bool()
+            #     if self.config.base_loss_prostate_mask:
+            #         mask &= prostate_mask[i] > 0.5
+            #     if self.config.base_loss_needle_mask:
+            #         mask &= needle_mask[i] > 0.5
+            #     masks.append(mask)
+            # masks = torch.stack(masks)
+            # predictions, batch_idx = MaskedPredictionModule()(heatmap_logits,
+            #                                                   masks)
+            # labels = torch.zeros(len(predictions), device=predictions.device)
+            # for i in range(len(predictions)):
+            #     labels[i] = label[batch_idx[i]]
+            # labels = labels[..., None]  # needs to match N, C shape of preds
+
+            #
+            # if self.config.base_loss == "ce":
+            #     loss += nn.functional.binary_cross_entropy_with_logits(
+            #         predictions,
+            #         labels,
+            #         pos_weight=torch.tensor(self.config.loss_pos_weight,
+            #                                 device=predictions.device),
+            #     )
+            # elif self.config.base_loss == "gce":
+            #     # we should convert to "two class" classification problem
+            #     loss_fn = BinaryGeneralizedCrossEntropy()
+            #     loss += loss_fn(predictions, labels)
+            # elif self.config.base_loss == "mae":
+            #     loss_unreduced = nn.functional.l1_loss(predictions,
+            #                                            labels,
+            #                                            reduction="none")
+            #     loss_unreduced[labels == 1] *= self.config.loss_pos_weight
+            #     loss += loss_unreduced.mean()
+            # else:
+            #     raise ValueError(f"Unknown base loss: {self.config.base_loss}")
+            #
+
+            if self.config.valid_loss_region_mode == "hard":
+                loss_fn = CancerDetectionValidRegionLoss(
+                    base_loss=self.config.base_loss,
+                    loss_pos_weight=self.config.loss_pos_weight,
+                    prostate_mask=self.config.base_loss_prostate_mask,
+                    needle_mask=self.config.base_loss_needle_mask,
+                )
+            elif self.config.valid_loss_region_mode == "soft":
+                loss_fn = CancerDetectionSoftValidRegionLoss(
+                    loss_pos_weight=self.config.loss_pos_weight,
+                    prostate_mask=self.config.base_loss_prostate_mask,
+                    needle_mask=self.config.base_loss_needle_mask,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown valid loss region mode: {self.config.valid_loss_region_mode}"
+                )
+
+            loss = loss_fn(
+                heatmap_logits, prostate_mask, needle_mask, label, involvement
+            )
+
+            # MIL loss component outside needle
+            if self.config.loss_mil_loss_weight > 0:
+                masks = []
+                for i in range(len(heatmap_logits)):
+                    mask = prostate_mask[i] > 0.5
+                    masks.append(mask)
+                masks = torch.stack(masks)
+                predictions, batch_idx = MaskedPredictionModule()(heatmap_logits, masks)
+                labels = torch.zeros(len(predictions), device=predictions.device)
+                for i in range(len(predictions)):
+                    labels[i] = label[batch_idx[i]]
+                labels = labels[..., None]  # needs to match N, C shape of preds
+                loss += self.config.loss_mil_loss_weight * simple_mil_loss(
+                    predictions,
+                    labels,
+                    batch_idx,
+                    top_percentile=self.config.loss_top_percentile,
+                    pos_weight=torch.tensor(
+                        self.config.loss_pos_weight, device=predictions.device
+                    ),
+                )
+
             masks = []
             for i in range(len(heatmap_logits)):
-                if all_cores_benign[i] and self.config.loss.use_full_prostate_mask_if_all_cores_benign:
-                    mask = prostate_mask[i] > 0.5
-                else: 
-                    mask = prostate_mask[i] > self.config.loss.prostate_threshold
-                    mask = mask & (needle_mask[i] > self.config.loss.needle_threshold)
+                mask = prostate_mask[i] > 0.5
+                mask = mask & (needle_mask[i] > 0.5)
                 masks.append(mask)
             masks = torch.stack(masks)
 
             predictions, batch_idx = MaskedPredictionModule()(heatmap_logits, masks)
-            labels = torch.zeros(len(predictions), device=predictions.device)
-            for i in range(len(predictions)):
-                labels[i] = label[batch_idx[i]]
-            labels = labels[..., None]  # needs to match N, C shape of preds
 
-            if self.config.loss.type == "basic_ce":
-                loss = nn.functional.binary_cross_entropy_with_logits(
-                    predictions, labels, pos_weight=torch.tensor(self.config.loss.pos_weight, device=predictions.device)
+            mean_predictions_in_mask = []
+            for i in range(B):
+                mean_predictions_in_mask.append(
+                    predictions[batch_idx == i].sigmoid().mean()
                 )
+            mean_predictions_in_mask = torch.stack(mean_predictions_in_mask)
+
+            self.mean_predictions_in_mask.append(mean_predictions_in_mask.detach())
+            self.labels.append(label.detach())
+            self.involvement.append(involvement.detach())
 
             return loss
 
@@ -313,16 +434,17 @@ class Experiment:
         family_history = batch["family_history"].to(self.config.device)
         anatomical_location = batch["loc"].to(self.config.device)
         B = len(bmode)
-        task_id=torch.zeros(B, dtype=torch.long, device=bmode.device)
+        task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
 
         with torch.cuda.amp.autocast():
             heatmap_logits = self.model(
-                bmode, 
+                bmode,
                 task_id=task_id,
                 anatomical_location=anatomical_location,
                 psa=psa,
                 age=age,
                 family_history=family_history,
+                prostate_mask=prostate_mask,
             )
 
             masks = []
@@ -351,6 +473,10 @@ class Experiment:
     def run_train_epoch(self, loader, desc="train"):
         self.model.train()
 
+        self.mean_predictions_in_mask = []
+        self.labels = []
+        self.involvement = []
+
         if self.epoch < self.config.warmup_epochs:
             optimizer = self.warmup_optimizer
             scheduler = None
@@ -360,19 +486,21 @@ class Experiment:
             scheduler = self.scheduler
 
         for i, batch in enumerate(tqdm(loader, desc=desc)):
-            if (
-                self.config.get("limit_train_batches", None) is not None
-                and i > self.config.limit_train_batches
-            ):
-                break
-
             loss = self.train_step(batch)
-            self.gradient_scaler.scale(loss).backward()
+
+            if self.config.use_amp:
+                self.gradient_scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
             if i % self.config.accumulate_grad_steps == 0:
-                self.gradient_scaler.step(optimizer)
-                self.gradient_scaler.update()
-                optimizer.zero_grad()
+                if self.config.use_amp:
+                    self.gradient_scaler.step(optimizer)
+                    self.gradient_scaler.update()
+                    optimizer.zero_grad()
+                else:
+                    optimizer.step()
+                    optimizer.zero_grad()
                 acc_steps = 1
             else:
                 acc_steps += 1
@@ -385,10 +513,18 @@ class Experiment:
 
             wandb.log(metrics)
 
-            if i % 100 == 0:
+            if i % 100 == 0 and self.config.log_images:
                 self.show_example(batch)
                 wandb.log({f"{desc}_example": wandb.Image(plt)})
                 plt.close()
+
+        self.mean_predictions_in_mask = torch.cat(self.mean_predictions_in_mask)
+        self.labels = torch.cat(self.labels)
+        self.involvement = torch.cat(self.involvement)
+
+        return self.create_and_report_metrics(
+            self.mean_predictions_in_mask, self.labels, self.involvement, desc="train"
+        )
 
     def run_eval_epoch(self, loader, desc="eval"):
         self.model.eval()
@@ -398,15 +534,9 @@ class Experiment:
         self.involvement = []
 
         for i, batch in enumerate(tqdm(loader, desc=desc)):
-            if (
-                self.config.get("limit_val_batches", None) is not None
-                and i > self.config.limit_val_batches
-            ):
-                break
-
             self.eval_step(batch)
 
-            if i % 100 == 0:
+            if i % 100 == 0 and self.config.log_images:
                 self.show_example(batch)
                 wandb.log({f"{desc}_example": wandb.Image(plt)})
                 plt.close()
@@ -419,63 +549,38 @@ class Experiment:
             self.mean_predictions_in_mask, self.labels, self.involvement, desc=desc
         )
 
-    def create_and_report_metrics(
-        self, mean_predictions_in_mask, labels, involvement, desc="eval"
-    ):
-        mean_predictions_in_mask = mean_predictions_in_mask.cpu().numpy()
+    def create_and_report_metrics(self, predictions, labels, involvement, desc="eval"):
+        from src.utils import calculate_metrics
+
+        predictions = predictions.cpu().numpy()
         labels = labels.cpu().numpy()
         involvement = involvement.cpu().numpy()
 
-        from sklearn.metrics import roc_auc_score, balanced_accuracy_score, r2_score
+        core_probs = predictions
+        core_labels = labels
 
         metrics = {}
-
-        # core predictions
-        core_probs = mean_predictions_in_mask
-        core_labels = labels
-        metrics["core_auc"] = roc_auc_score(core_labels, core_probs)
-        plt.hist(core_probs[core_labels == 0], bins=100, alpha=0.5, density=True)
-        plt.hist(core_probs[core_labels == 1], bins=100, alpha=0.5, density=True)
-        plt.legend(["Benign", "Cancer"])
-        plt.xlabel(f"Probability of cancer")
-        plt.ylabel("Density")
-        plt.title(f"Core AUC: {metrics['core_auc']:.3f}")
-        wandb.log(
-            {
-                f"{desc}_corewise_histogram": wandb.Image(
-                    plt, caption="Histogram of core predictions"
-                )
-            }
+        metrics_ = calculate_metrics(
+            predictions, labels, log_images=self.config.log_images
         )
-        plt.close()
+        metrics.update(metrics_)
 
         # high involvement core predictions
         high_involvement = involvement > 0.4
         benign = core_labels == 0
-
         keep = np.logical_or(high_involvement, benign)
         if keep.sum() > 0:
             core_probs = core_probs[keep]
             core_labels = core_labels[keep]
-            metrics["core_auc_high_involvement"] = roc_auc_score(
-                core_labels, core_probs
+            metrics_ = calculate_metrics(
+                core_probs, core_labels, log_images=self.config.log_images
             )
-            plt.hist(core_probs[core_labels == 0], bins=100, alpha=0.5, density=True)
-            plt.hist(core_probs[core_labels == 1], bins=100, alpha=0.5, density=True)
-            plt.legend(["Benign", "Cancer"])
-            plt.xlabel(f"Probability of cancer")
-            plt.ylabel("Density")
-            plt.title(
-                f"Core AUC (high involvement): {metrics['core_auc_high_involvement']:.3f}"
-            )
-            wandb.log(
+            metrics.update(
                 {
-                    f"{desc}/corewise_histogram_high_involvement": wandb.Image(
-                        plt, caption="Histogram of core predictions"
-                    )
+                    f"{metric}_high_involvement": value
+                    for metric, value in metrics_.items()
                 }
             )
-            plt.close()
 
         metrics = {f"{desc}/{k}": v for k, v in metrics.items()}
         metrics["epoch"] = self.epoch
@@ -485,10 +590,10 @@ class Experiment:
     @torch.no_grad()
     def show_example(self, batch):
         # don't log images by default, since they take up a lot of space.
-        # should be considered more of a debugging/demonstration tool
-        if self.config.get("log_images", False) is False:
+        # should be considered more of a debuagging/demonstration tool
+        if self.config.log_images is False:
             return
-    
+
         bmode = batch["bmode"].to(self.config.device)
         needle_mask = batch["needle_mask"].to(self.config.device)
         prostate_mask = batch["prostate_mask"].to(self.config.device)
@@ -499,10 +604,10 @@ class Experiment:
         family_history = batch["family_history"].to(self.config.device)
         anatomical_location = batch["loc"].to(self.config.device)
         B = len(bmode)
-        task_id=torch.zeros(B, dtype=torch.long, device=bmode.device)
+        task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
 
         logits = self.model(
-            bmode, 
+            bmode,
             task_id=task_id,
             anatomical_location=anatomical_location,
             psa=psa,
@@ -548,8 +653,6 @@ class Experiment:
         ax[2].set_title(f"Core prediction: {core_prediction:.3f}")
 
     def save_experiment_state(self):
-        if self.config.get("exp_state_path") is None:
-            return
         logging.info(f"Saving experiment snapshot to {self.exp_state_path}")
         torch.save(
             {
@@ -558,27 +661,29 @@ class Experiment:
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,
                 "best_score": self.best_score,
+                "gradient_scaler": self.gradient_scaler.state_dict(),
                 "rng": get_all_rng_states(),
             },
-            self.config.exp_state_path,
+            self.exp_state_path,
         )
 
     def save_model_weights(self, score, is_best_score=False):
-        if self.config.get("checkpoint_dir") is None or not is_best_score:
+        if self.config.checkpoint_dir is None or not is_best_score:
             return
         logging.info("Saving model to checkpoint directory")
         logging.info(f"Checkpoint directory: {self.config.checkpoint_dir}")
         torch.save(
             self.model.state_dict(),
             os.path.join(
-                self.checkpoint_dir,
+                self.config.checkpoint_dir,
                 f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
             ),
         )
 
     def teardown(self):
-        # remove checkpoint file since it will take up space
-        os.remove("experiment_state.ckpt")
+        # remove experiment state file
+        if self.exp_state_path is not None:
+            os.remove(self.exp_state_path)
 
 
 class MaskedPredictionModule(nn.Module):
@@ -611,6 +716,189 @@ class MaskedPredictionModule(nn.Module):
         return patch_logits, core_idx
 
 
+def involvement_tolerant_loss(patch_logits, patch_labels, core_indices, involvement):
+    batch_size = len(involvement)
+    loss = torch.tensor(0, dtype=torch.float32, device=patch_logits.device)
+    for i in range(batch_size):
+        patch_logits_for_core = patch_logits[core_indices == i]
+        patch_labels_for_core = patch_labels[core_indices == i]
+        involvement_for_core = involvement[i]
+        if patch_labels_for_core[0].item() == 0:
+            # core is benign, so label noise is assumed to be low
+            loss += nn.functional.binary_cross_entropy_with_logits(
+                patch_logits_for_core, patch_labels_for_core
+            )
+        elif involvement_for_core.item() > 0.65:
+            # core is high involvement, so label noise is assumed to be low
+            loss += nn.functional.binary_cross_entropy_with_logits(
+                patch_logits_for_core, patch_labels_for_core
+            )
+        else:
+            # core is of intermediate involvement, so label noise is assumed to be high.
+            # we should be tolerant of the model's "false positives" in this case.
+            pred_index_sorted_by_cancer_score = torch.argsort(
+                patch_logits_for_core[:, 0], descending=True
+            )
+            patch_logits_for_core = patch_logits_for_core[
+                pred_index_sorted_by_cancer_score
+            ]
+            patch_labels_for_core = patch_labels_for_core[
+                pred_index_sorted_by_cancer_score
+            ]
+            n_predictions = patch_logits_for_core.shape[0]
+            patch_predictions_for_core_for_loss = patch_logits_for_core[
+                : int(n_predictions * involvement_for_core.item())
+            ]
+            patch_labels_for_core_for_loss = patch_labels_for_core[
+                : int(n_predictions * involvement_for_core.item())
+            ]
+            loss += nn.functional.binary_cross_entropy_with_logits(
+                patch_predictions_for_core_for_loss,
+                patch_labels_for_core_for_loss,
+            )
+
+
+def simple_mil_loss(
+    patch_logits,
+    patch_labels,
+    core_indices,
+    top_percentile=0.2,
+    pos_weight=torch.tensor(1.0),
+):
+    ce_loss = nn.functional.binary_cross_entropy_with_logits(
+        patch_logits, patch_labels, pos_weight=pos_weight, reduction="none"
+    )
+
+    loss = torch.tensor(0, dtype=torch.float32, device=patch_logits.device)
+
+    for i in torch.unique(core_indices):
+        patch_losses_for_core = ce_loss[core_indices == i]
+        n_patches = len(patch_losses_for_core)
+        n_patches_to_keep = int(n_patches * top_percentile)
+        patch_losses_for_core_sorted = torch.sort(patch_losses_for_core)[0]
+        patch_losses_for_core_to_keep = patch_losses_for_core_sorted[:n_patches_to_keep]
+        loss += patch_losses_for_core_to_keep.mean()
+
+    return loss
+
+
+def get_segmentation_loss_and_score(mask_logits, gt_mask):
+    B, C, H, W = mask_logits.shape
+
+    gt_mask = torch.nn.functional.interpolate(gt_mask.float(), size=(H, W))
+
+    ce_loss = torch.nn.functional.binary_cross_entropy_with_logits(mask_logits, gt_mask)
+    _dice_loss = dice_loss(mask_logits.sigmoid(), gt_mask)
+    loss = ce_loss + _dice_loss
+
+    _dice_score = dice_score(mask_logits.sigmoid(), gt_mask)
+    return loss, _dice_score
+
+
+class CancerDetectionValidRegionLoss(nn.Module):
+    def __init__(
+        self,
+        base_loss: str = "ce",
+        loss_pos_weight: float = 1.0,
+        prostate_mask: bool = True,
+        needle_mask: bool = True,
+    ):
+        super().__init__()
+        self.base_loss = base_loss
+        self.loss_pos_weight = loss_pos_weight
+        self.prostate_mask = prostate_mask
+        self.needle_mask = needle_mask
+
+    def forward(self, cancer_logits, prostate_mask, needle_mask, label, involvement):
+        masks = []
+        for i in range(len(cancer_logits)):
+            mask = torch.ones(
+                prostate_mask[i].shape, device=prostate_mask[i].device
+            ).bool()
+            if self.prostate_mask:
+                mask &= prostate_mask[i] > 0.5
+            if self.needle_mask:
+                mask &= needle_mask[i] > 0.5
+            masks.append(mask)
+        masks = torch.stack(masks)
+        predictions, batch_idx = MaskedPredictionModule()(cancer_logits, masks)
+        labels = torch.zeros(len(predictions), device=predictions.device)
+        for i in range(len(predictions)):
+            labels[i] = label[batch_idx[i]]
+        labels = labels[..., None]  # needs to match N, C shape of preds
+
+        loss = torch.tensor(0, dtype=torch.float32, device=predictions.device)
+        if self.base_loss == "ce":
+            loss += nn.functional.binary_cross_entropy_with_logits(
+                predictions,
+                labels,
+                pos_weight=torch.tensor(
+                    self.loss_pos_weight, device=predictions.device
+                ),
+            )
+        elif self.base_loss == "gce":
+            # we should convert to "two class" classification problem
+            loss_fn = BinaryGeneralizedCrossEntropy()
+            loss += loss_fn(predictions, labels)
+        elif self.base_loss == "mae":
+            loss_unreduced = nn.functional.l1_loss(
+                predictions, labels, reduction="none"
+            )
+            loss_unreduced[labels == 1] *= self.config.loss_pos_weight
+            loss += loss_unreduced.mean()
+        else:
+            raise ValueError(f"Unknown base loss: {self.config.base_loss}")
+
+        return loss
+
+
+class CancerDetectionSoftValidRegionLoss(nn.Module):
+    def __init__(
+        self,
+        loss_pos_weight: float = 1,
+        prostate_mask: bool = True,
+        needle_mask: bool = True,
+        sigma: float = 15,
+    ):
+        super().__init__()
+        self.loss_pos_weight = loss_pos_weight
+        self.prostate_mask = prostate_mask
+        self.needle_mask = needle_mask
+        self.sigma = sigma
+
+    def forward(self, cancer_logits, prostate_mask, needle_mask, label, involvement):
+        masks = []
+        for i in range(len(cancer_logits)):
+            mask = prostate_mask[i] > 0.5
+            mask = mask & (needle_mask[i] > 0.5)
+            mask = mask.float().cpu().numpy()[0]
+
+            # resize and blur mask
+            from skimage.transform import resize
+
+            mask = resize(mask, (256, 256), order=0)
+            from skimage.filters import gaussian
+
+            mask = gaussian(mask, self.sigma, mode="constant", cval=0)
+            mask = mask - mask.min()
+            mask = mask / mask.max()
+            mask = torch.tensor(mask, device=cancer_logits.device)[None, ...]
+
+            masks.append(mask)
+        masks = torch.stack(masks)
+
+        B = label.shape[0]
+        label = label.repeat(B, 1, 256, 256).float()
+        loss_by_pixel = nn.functional.binary_cross_entropy_with_logits(
+            cancer_logits,
+            label,
+            pos_weight=torch.tensor(self.loss_pos_weight, device=cancer_logits.device),
+            reduction="none",
+        )
+        loss = (loss_by_pixel * masks).mean()
+        return loss
+
+
 CORE_LOCATIONS = [
     "LML",
     "RBL",
@@ -635,14 +923,21 @@ class MedSAMWithPCAPrompts(nn.Module):
         freeze_backbone (bool): If True, freezes the backbone of the model.
     """
 
+    PROMPT_OPTIONS = [
+        "task",
+        "anatomical",
+        "psa",
+        "age",
+        "family_history",
+        "prostate_mask",
+    ]
     METADATA = "psa", "age", "family_history"
 
     def __init__(
         self,
         n_tasks=1,
-        use_task_prompt=True,
-        use_anatomical_prompt=True,
-        use_metadata_prompt=True,
+        prompts: list[str] = [],
+        prompt_dropout: float = 0.0,  # dropout for prompt embeddings
     ):
         super().__init__()
         self._frozen_backbone = False
@@ -652,60 +947,125 @@ class MedSAMWithPCAPrompts(nn.Module):
 
         self.task_prompt_module = nn.Embedding(n_tasks, EMBEDDING_DIM)
         self.anatomical_prompt_module = nn.Embedding(6, EMBEDDING_DIM)
+        self.anatomical_null_prompt = torch.zeros(1, EMBEDDING_DIM)
         # embed floating point values to 256 dim
         self.psa_prompt_module = nn.Sequential(
             nn.Linear(1, 128),
             nn.ReLU(),
-            nn.Linear(128, 256),
+            nn.Linear(128, EMBEDDING_DIM),
         )
+        self.psa_null_prompt = torch.zeros(1, EMBEDDING_DIM)
         self.age_prompt_module = nn.Sequential(
             nn.Linear(1, 128),
             nn.ReLU(),
-            nn.Linear(128, 256),
-        )  
+            nn.Linear(128, EMBEDDING_DIM),
+        )
+        self.age_null_prompt = torch.zeros(1, EMBEDDING_DIM)
+
         # 3 values for family history: 0, 1, 2 (yes, no, unknown)
         self.family_history_prompt_module = nn.Embedding(3, EMBEDDING_DIM)
 
-        self.use_task_prompt = use_task_prompt
-        self.use_anatomical_prompt = use_anatomical_prompt
-        self.use_metadata_prompt = use_metadata_prompt
+        assert all(
+            p in self.PROMPT_OPTIONS for p in prompts
+        ), f"Unknown prompt option. Options are {self.PROMPT_OPTIONS}"
+        self.prompts = prompts
+        self.prompt_dropout = prompt_dropout
 
-    def forward(self, image, task_id=None, anatomical_location=None, psa=None, age=None, family_history=None):
-
+    def forward(
+        self,
+        image=None,
+        task_id=None,
+        anatomical_location=None,
+        psa=None,
+        age=None,
+        family_history=None,
+        prostate_mask=None,
+    ):
         with torch.no_grad() if self._frozen_backbone else torch.enable_grad():
             image_feats = self.medsam_model.image_encoder(image)
 
-        sparse_embedding, dense_embedding = self.medsam_model.prompt_encoder(
-            None, None, None  # no prompt - find prostate
+        if "prostate_mask" in self.prompts:
+            if (
+                prostate_mask is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                mask = None
+            else:
+                B, C, H, W = prostate_mask.shape
+                if H != 256 or W != 256:
+                    prostate_mask = torch.nn.functional.interpolate(
+                        prostate_mask, size=(256, 256)
+                    )
+                mask = prostate_mask
+
+        sparse_embedding, dense_embedding = self.medsam_model.prompt_encoder.forward(
+            None, None, mask  # no prompt - find prostate
         )
 
-        if self.use_task_prompt:
+        if "task" in self.prompts:
             task_embedding = self.task_prompt_module(task_id)
             task_embedding = task_embedding[:, None, :]
             sparse_embedding = torch.cat([sparse_embedding, task_embedding], dim=1)
 
-        if self.use_anatomical_prompt:
-            anatomical_embedding = self.anatomical_prompt_module(anatomical_location)
+        if "anatomical" in self.prompts:
+            if (
+                anatomical_location is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                anatomical_embedding = self.anatomical_null_prompt
+            else:
+                anatomical_embedding = self.anatomical_prompt_module(
+                    anatomical_location
+                )
             anatomical_embedding = anatomical_embedding[:, None, :]
             sparse_embedding = torch.cat(
                 [sparse_embedding, anatomical_embedding], dim=1
             )
 
-        if self.use_metadata_prompt:
-            psa_embedding = self.psa_prompt_module(psa)
+        if "psa" in self.prompts:
+            if (
+                psa is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                psa_embedding = self.psa_null_prompt
+            else:
+                psa_embedding = self.psa_prompt_module(psa)
             psa_embedding = psa_embedding[:, None, :]
             sparse_embedding = torch.cat([sparse_embedding, psa_embedding], dim=1)
 
-            age_embedding = self.age_prompt_module(age)
+        if "age" in self.prompts:
+            if (
+                age is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                age_embedding = self.age_null_prompt
+            else:
+                age_embedding = self.age_prompt_module(age)
             age_embedding = age_embedding[:, None, :]
             sparse_embedding = torch.cat([sparse_embedding, age_embedding], dim=1)
 
+        if "family_history" in self.prompts:
+            if (
+                family_history is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                family_history = torch.ones_like(task_id) * 2  # this encodes "unknown"
             family_history_embedding = self.family_history_prompt_module(family_history)
             family_history_embedding = family_history_embedding[:, None, :]
             sparse_embedding = torch.cat(
                 [sparse_embedding, family_history_embedding], dim=1
             )
-    
+
         mask_logits = self.medsam_model.mask_decoder.forward(
             image_feats,
             self.medsam_model.prompt_encoder.get_dense_pe(),
@@ -722,10 +1082,16 @@ class MedSAMWithPCAPrompts(nn.Module):
         self._frozen_backbone = False
 
     def get_encoder_parameters(self):
-        return self.medsam_model.image_encoder.parameters()
-    
+        # should separate image encoder parameters from neck parameters
+        return [
+            p
+            for k, p in self.medsam_model.image_encoder.named_parameters()
+            if "neck" not in k
+        ]
+
     def get_non_encoder_parameters(self):
         from itertools import chain
+
         return chain(
             self.medsam_model.mask_decoder.parameters(),
             self.task_prompt_module.parameters(),
@@ -733,7 +1099,53 @@ class MedSAMWithPCAPrompts(nn.Module):
             self.psa_prompt_module.parameters(),
             self.age_prompt_module.parameters(),
             self.family_history_prompt_module.parameters(),
+            self.medsam_model.image_encoder.neck.parameters(),
         )
 
+
+class BinaryGeneralizedCrossEntropy(torch.nn.Module):
+    def __init__(self, q=0.7):
+        super().__init__()
+        self.q = q
+
+    def forward(self, pred, labels):
+        pred = pred.sigmoid()[..., 0]
+        labels = labels[..., 0].long()
+        pred = torch.stack([1 - pred, pred], dim=-1)
+        pred = torch.clamp(pred, min=1e-7, max=1.0)
+        label_one_hot = F.one_hot(labels, 2).float().to(pred.device)
+        gce = (1.0 - torch.pow(torch.sum(label_one_hot * pred, dim=1), self.q)) / self.q
+        return gce.mean()
+
+
+def load_encoder_weights(image_encoder, weights_path, adapter_mode=None):
+    state = torch.load(weights_path, map_location="cpu")
+    if adapter_mode is None:
+        image_encoder.load_state_dict(state)
+    elif "dino" in adapter_mode:
+        from train_medsam_dino_style import MedSAMDino
+
+        model = MedSAMDino()
+        model.load_state_dict(state)
+        image_encoder_state = model.image_encoder.state_dict()
+        image_encoder.load_state_dict(image_encoder_state)
+    elif "ibot" in adapter_mode:
+        from train_medsam_ibot_style import MedSAMIBot
+
+        model = MedSAMIBot(8192, 8192)
+        model.load_state_dict(state)
+        image_encoder_state = model.image_encoder.state_dict()
+        image_encoder.load_state_dict(image_encoder_state)
+    else:
+        raise ValueError(f"Unknown adapter mode: {adapter_mode}")
+
+
 if __name__ == "__main__":
-    main()
+    from simple_parsing import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_arguments(Args, dest="args")
+    args = parser.parse_args().args
+
+    experiment = Experiment(args)
+    experiment.run()
