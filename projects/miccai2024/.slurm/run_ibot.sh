@@ -2,18 +2,18 @@
 
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:a40:1
-#SBATCH --time 8:00:00
+#SBATCH --time 16:00:00
 #SBATCH -c 16 
-#SBATCH --qos=m2
+#SBATCH --qos=normal
 #SBATCH --output=slurm-%j.log
 #SBATCH --open-mode=append
 
-# send this batch script a SIGUSR1 240 seconds
+# send this batch script a SIGUSR1 4 minutes
 # before we hit our time limit
 #SBATCH --signal=B:USR1@240
 
-CENTER=UVA
-EXP_NAME=${CENTER}_age_psa_prompts
+CENTER=UA
+EXP_NAME=${CENTER}_ibot
 EXP_DIR=experiments/${EXP_NAME}/$SLURM_JOB_ID
 CKPT_DIR=/checkpoint/$USER/$SLURM_JOB_ID
 
@@ -25,10 +25,14 @@ export WANDB_RESUME=allow
 # Create experiment directory
 echo "EXP_DIR: $EXP_DIR"
 mkdir -p $EXP_DIR
+
 # Symbolic link to checkpoint directory
 # so it is easier to find them
 echo "CKPT_DIR: $CKPT_DIR"
-ln -s $CKPT_DIR $(realpath $EXP_DIR)/checkpoints
+# only do it if the directory does not exist
+if [ ! -d $EXP_DIR/checkpoints ]; then
+  ln -s $CKPT_DIR $(realpath $EXP_DIR)/checkpoints
+fi
 
 # Kill training process and resubmit job if it receives a SIGUSR1
 handle_timeout_or_preemption() {
@@ -45,27 +49,20 @@ handle_timeout_or_preemption() {
 trap handle_timeout_or_preemption SIGUSR1
 
 # Run training script
-srun python train_medsam.py \
-  --test_center $CENTER \
-  --undersample_benign_ratio 3 \
-  --min_involvement_train 40 \
-  --augmentations translate \
-  --remove_benign_cores_from_positive_patients \
-  --lr 0.00001 \
-  --encoder_lr 0.00001 \
-  --warmup_lr 0.0001 \
-  --warmup_epochs 1 \
-  --wd 0 \
-  --prompts age psa \
-  --epochs 30 \
-  --test_every_epoch \
-  --base_loss ce \
-  --device cuda \
-  --accumulate_grad_steps 8 \
-  --exp_dir $EXP_DIR \
-  --checkpoint_dir $CKPT_DIR \
-  --project miccai2024 \
+srun python train_medsam_ibot_style.py \
   --name $EXP_NAME \
-  --log_images \
-  --seed 42 & wait
-
+  --nouse_nct_data \
+  --use_ua_unlabelled_data \
+  --crop_scale_1 0.2 1 \
+  --crop_scale_2 0.8 1 \
+  --random_gamma 0.5 1.5 \
+  --ckpt_dir $CKPT_DIR \
+  --log_image_freq 500 \
+  --batch_size 2 \
+  --out_dim 8192 \
+  --patch_out_dim 8192 \
+  --use_amp \
+  --project miccai2024_ssl & 
+  
+child_pid=$!
+wait $child_pid
