@@ -17,7 +17,7 @@ import wandb
 import medAI
 from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
 
-from utils.metrics import MetricCalculator
+from utils.metrics import MetricCalculator, MetricConfig
 
 from timm.optim.optim_factory import create_optimizer
 
@@ -64,7 +64,7 @@ class FeatureExtractorConfig:
         valid_models = timm.list_models()
         if self.model_name not in valid_models:
             raise ValueError(f"'{self.model_name}' is not a valid model. Choose from timm.list_models(): {valid_models}")
-        
+
 @dataclass
 class OptimizerConfig:
     opt: str = 'adam'
@@ -110,7 +110,7 @@ class BaselineConfig(BasicExperimentConfig):
     )
     cohort_selection_config: KFoldCohortSelectionOptions | LeaveOneCenterOutCohortSelectionOptions = subgroups(
         {"kfold": KFoldCohortSelectionOptions(fold=0), "loco": LeaveOneCenterOutCohortSelectionOptions(leave_out='JH')},
-        default="kfold"
+        default="loco"
     )
     
     model_config: FeatureExtractorConfig = FeatureExtractorConfig()
@@ -119,11 +119,15 @@ class BaselineConfig(BasicExperimentConfig):
         default="regular"
     )
     
+    metric_config: MetricConfig = MetricConfig() 
+    
     fourier_transform_config: FourierTransformConfig = FourierTransformConfig()
     
     poly1_loss_config: Poly1LossConfig = Poly1LossConfig()
-        
-        
+    
+    label_smoothing: bool = False
+    
+            
 class BaselineExperiment(BasicExperiment): 
     config_class = BaselineConfig
     config: BaselineConfig
@@ -250,6 +254,10 @@ class BaselineExperiment(BasicExperiment):
             patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
+        
+        if isinstance(self.config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+            if self.config.cohort_selection_config.leave_out == "UVA":
+                self.config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
                 
         test_ds = ExactNCT2013RFImagePatches(
             split="test",
@@ -271,7 +279,11 @@ class BaselineExperiment(BasicExperiment):
         )
         
     def setup_metrics(self):
-        self.metric_calculator = MetricCalculator()
+        self.metric_calculator = MetricCalculator(
+            self.config.metric_config.high_inv_threshold,
+            self.config.metric_config.include_all_inv,
+            self.config.metric_config.avg_core_probs_first
+            )
     
     def setup_model(self):
         # Create fourier transform if enabled
@@ -359,13 +371,23 @@ class BaselineExperiment(BasicExperiment):
                 images = images.cuda()
                 labels = labels.cuda()
                 
+                
                 # Zero gradients
                 if train:
                     self.optimizer.zero_grad()
                 
-                logits = self.model(images)
+                # smoothing labels
+                smoothed_labels = None
+                if self.config.label_smoothing:    
+                    cancer_inv = meta_data["pct_cancer"]
+                    inv = torch.nan_to_num(cancer_inv, nan=100.0)/100.
+                    inv = inv.float().cuda()
+                    onehot_labels = F.one_hot(labels, num_classes=2).float()
+                    smoothed_labels = onehot_labels*(inv).unsqueeze(-1) + (1 - onehot_labels)*(1 - inv).unsqueeze(-1)
                 
-                loss = criterion(logits, labels)
+                # Forward pass
+                logits = self.model(images)
+                loss = criterion(logits, labels if not self.config.label_smoothing else smoothed_labels)
                                 
                 # Optimizer step
                 if train:
@@ -377,7 +399,7 @@ class BaselineExperiment(BasicExperiment):
                         loss2.backward()
                         loss = loss2.detach().clone()
                         self.optimizer.second_step(zero_grad=True)                 
-                    else:                                       
+                    else:
                         self.optimizer.step()
                     
                     self.scheduler.step()

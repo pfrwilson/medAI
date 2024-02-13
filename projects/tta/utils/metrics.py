@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torchmetrics
 from copy import deepcopy
+from dataclasses import dataclass
 
 def accuracy(*args, **kwargs):
     if "threshold" in kwargs:
@@ -12,6 +13,13 @@ def accuracy(*args, **kwargs):
     else:
         threshold = 0.4
     return torchmetrics.functional.accuracy(*args, **kwargs, threshold=threshold)
+
+@dataclass
+class MetricConfig:
+    high_inv_threshold: float = 0.4
+    include_all_inv: bool = True
+    avg_core_probs_first: bool = False
+    
 
 class MetricCalculator(object):
     # list_of_metrics: List[str] = [

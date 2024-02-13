@@ -82,20 +82,13 @@ class FinetuneExperiment(BaselineExperiment):
         super().__init__(config)
         self.best_val_loss = np.inf
         self.best_score_updated = False
-        if self.config.finetuner_config.checkpoint_path_name is None:
-            self._checkpoint_path = os.path.join(
-                os.getcwd(),
-                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-                f'logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-                'best_model.ckpt'
-                )
-        else:
-            self._checkpoint_path = os.path.join(
-                os.getcwd(),
-                # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
-                f'logs/tta/{self.config.finetuner_config.checkpoint_path_name}/{self.config.finetuner_config.checkpoint_path_name}_{self.config.cohort_selection_config.leave_out}/', 
-                'best_model.ckpt'
-                )
+        assert self.config.finetuner_config.checkpoint_path_name is not None, "Please provide a checkpoint path name for loading the pre-trained model"
+        self._checkpoint_path = os.path.join(
+            os.getcwd(),
+            # f'projects/tta/logs/tta/vicreg_pretrn_2048zdim_gn_loco2/vicreg_pretrn_2048zdim_gn_loco2_{self.config.cohort_selection_config.leave_out}/', 
+            f'logs/tta/{self.config.finetuner_config.checkpoint_path_name}/{self.config.finetuner_config.checkpoint_path_name}_{self.config.cohort_selection_config.leave_out}/', 
+            'best_model.ckpt'
+            )
         
     def setup(self):
         # logging setup

@@ -1,10 +1,10 @@
 # # ensemble experiment
 # NUM_ENSEMBLES=5
-# INSTANCE_NORM=False
+# INSTANCE_NORM=True
 # USE_BATCH_NORM=False
-# GROUP="ensemble_${NUM_ENSEMBLES}mdls_gn_3ratio_loco"
+# GROUP="ensemble_${NUM_ENSEMBLES}mdls_gn_3ratio_stand-nrm_loco"
 
-# for CENTER in  "UVA" #"CRCEO" # "JH" "PCC" "PMCC" 
+# for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO"  
 # do
 #     python ensemble_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -42,13 +42,13 @@
 
 
 # baseline experiment
-INSTANCE_NORM=True
+INSTANCE_NORM=False
 USE_BATCH_NORM=False
-GROUP="baseline_gn_crtd3ratio_loco"
+GROUP="baseline_avgprobs_gn_3ratio_LSmth_loco"
 # GROUP="sam_baseline_gn_e-4rho_loco"
 # GROUP="baseline_bn_inst-nrm_loco"
 
-for CENTER in  "JH" "PCC" "PMCC" # "UVA" "CRCEO" 
+for CENTER in "JH" "PMCC" "PCC" # "CRCEO" "UVA" # 
 do
     python baseline_experiment.py \
         --name "${GROUP}_${CENTER}" \
@@ -62,6 +62,10 @@ do
         --benign_to_cancer_ratio_train 3.0 \
         --use_poly1_loss False \
         --eps 1.0 \
+        --patch_size_mm 5.0 5.0 \
+        --strides 1.0 1.0 \
+        --label_smoothing True \
+        --avg_core_probs_first True \
         --lr 0.0001
 done
 
@@ -116,7 +120,7 @@ done
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
 # GROUP="vicreg_pretrn_1024zdim_gn_300ep_3ratio_loco"
-# for CENTER in "PCC" # "PMCC" # "UVA" "CRCEO" "JH"     
+# for CENTER in "UVA" "CRCEO" #"PCC" # "PMCC" #  "JH"     
 # do
 #     python vicreg_pretrain_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -191,10 +195,11 @@ done
 # # vicreg finetune experiment
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="vicreg_1024-300finetune_1e-3lr_gn_loco"
-# # checkpoint_path_name="vicreg_pretrn_2048zdim_gn_300ep_loco"
-# checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
-# for CENTER in  "PMCC" "UVA" "CRCEO" # "JH" "PCC" 
+# # GROUP="vicreg_1024-300finetune_1e-3lr_gn_loco"
+# GROUP="vicreg_1024-300finetune_1e-3lr_gn_3ratio_loco"
+# # checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
+# checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_3ratio_loco"
+# for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO"  
 # do
 #     python finetune_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
