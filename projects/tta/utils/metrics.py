@@ -31,7 +31,7 @@ class MetricCalculator(object):
         accuracy,
     ]
     
-    def __init__(self, high_inv_thresh = 40.0, include_all_inv = True, avg_core_probs_first: bool = False):
+    def __init__(self, high_inv_thresh = 40.0, include_all_inv = True, avg_core_probs_first: bool = True):
         self.avg_core_probs_first = avg_core_probs_first
         self.high_inv_thresh = high_inv_thresh
         self.include_all_inv = include_all_inv
