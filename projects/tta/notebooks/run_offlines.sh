@@ -17,4 +17,6 @@
 # export PYTHONPATH=$PYTHONPATH:/h/pwilson/projects/medAI
 
 # python offline_ensemble_pseudo.py
-python offline_ensemble_memo.py
+# python offline_ensemble_memo.py
+# python offline_memo.py
+python offline_divemble_pseudo.py

@@ -16,11 +16,10 @@ def accuracy(*args, **kwargs):
 
 @dataclass
 class MetricConfig:
-    high_inv_threshold: float = 0.4
+    high_inv_threshold: float = 40.0
     include_all_inv: bool = True
-    avg_core_probs_first: bool = False
+    avg_core_probs_first: bool = True
     
-
 class MetricCalculator(object):
     # list_of_metrics: List[str] = [
     #     roc_auc_score,
@@ -178,6 +177,28 @@ class MetricCalculator(object):
             self.best_score_updated = False
                 
         return self.best_score_updated, self._get_best_score_dict()
+
+    def get_probs_labels(self, core_ids = None, high_inv=False, core_or_patch = "core"):      
+        if core_ids is None:
+            ids = self.core_id_invs.keys()
+            if high_inv:
+                ids = self.remove_low_inv_ids(self.core_id_invs)
+        else:
+            ids = core_ids
+        
+        if core_or_patch == "core":
+            probs = torch.stack(
+                [torch.stack(probs_list).mean(dim=0) for id, probs_list in self.core_id_probs.items() if id in ids])          
+            labels = torch.stack(
+                [labels_list[0] for id, labels_list in self.core_id_labels.items() if id in ids])
+        else:
+            probs = torch.cat(
+                [torch.stack(probs_list) for id, probs_list in self.core_id_probs.items() if id in ids]
+                )
+            labels = torch.cat(
+            [torch.tensor(labels_list) for id, labels_list in self.core_id_labels.items() if id in ids]
+            )
+        return probs, labels
 
 
 def brier_score(probs, targets, weighted=True):

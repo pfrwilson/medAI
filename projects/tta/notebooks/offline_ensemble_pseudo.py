@@ -46,8 +46,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     ## Data Finetuning
     ###### No support dataset ######
 
-    from vicreg_pretrain_experiment import PretrainConfig
-    config = PretrainConfig(cohort_selection_config=LeaveOneCenterOutCohortSelectionOptions(leave_out=f"{LEAVE_OUT}"),
+    from ensemble_experiment import EnsembleConfig
+    config = EnsembleConfig(cohort_selection_config=LeaveOneCenterOutCohortSelectionOptions(leave_out=f"{LEAVE_OUT}"),
     )
 
     from baseline_experiment import BaselineConfig
@@ -132,6 +132,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
 
     [model.eval() for model in list_models]
     [model.cuda() for model in list_models]
+
     
     
     # ## Temp Scaling
@@ -206,8 +207,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     # loader = test_test_loader
     loader = test_loader
     enable_pseudo_label = True
-    temp_scale = True
-    certain_threshold = 0.4
+    temp_scale = False
+    certain_threshold = 0.8
 
     metric_calculator = MetricCalculator()
     desc = "test"
@@ -286,10 +287,11 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
         
     ## Log with wandb
     import wandb
-    # group=f"offline_combEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
+    # group=f"offline_combEnsmPsdo_gn_3ratio_loco"
+    group=f"offline_combEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_avgprob_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_avgprob_.8uncrtnty_gn_3ratio_loco"
-    group=f"offline_combEnsmPsdo_tempsc_avgprob_gn_3ratio_loco"
+    # group=f"offline_combEnsmPsdo_tempsc_avgprob_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_tempsc_avgprob_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_ensemble_avgprob_5mdls_gn_3ratio_loco"
     # group=f"offline_ensemble_tempsc_asvgprob_5mdls_gn_3ratio_loco"
