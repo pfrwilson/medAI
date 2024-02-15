@@ -125,7 +125,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                         num_channels=channels
                         )) for _ in range(5)]
 
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
     state = torch.load(CHECkPOINT_PATH)
     [model.load_state_dict(state["list_models"][i]) for i, model in enumerate(list_models)]
@@ -287,8 +288,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
         
     ## Log with wandb
     import wandb
+    group=f"offline_combNewEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_gn_3ratio_loco"
-    group=f"offline_combEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
+    # group=f"offline_combEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_avgprob_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_avgprob_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_tempsc_avgprob_gn_3ratio_loco"

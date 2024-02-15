@@ -124,7 +124,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                         num_channels=channels
                         )) for _ in range(5)]
 
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
     state = torch.load(CHECkPOINT_PATH)
     [model.load_state_dict(state["list_models"][i]) for i, model in enumerate(list_models)]
@@ -206,9 +207,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     from memo_experiment import batched_marginal_entropy
     
     loader = test_loader
-        
+    enable_memo = True
     temp_scale = False
-    certain_threshold = 0.8
+    certain_threshold = 0.4
 
     metric_calculator = MetricCalculator()
     desc = "test"
@@ -296,6 +297,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
         
     ## Log with wandb
     import wandb
+    group=f"offline_sprtNewEnsmMemo_gn_3ratio_loco"
     # group=f"offline_sprtEnsmMemo_gn_3ratio_loco"
     # group=f"offline_sprtEnsmMemo_avgprob_gn_3ratio_loco"
     # group=f"offline_sprtEnsmMemo_avgprob_.8uncrtnty_gn_3ratio_loco"
@@ -306,7 +308,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     # group=f"offline_sprtEnsmMemo_tempsc_.8uncrtnty_gn_3ratio_loco"
     
     # group=f"offline_combEnsmMemo_avgprob_gn_3ratio_loco"
-    group=f"offline_combEnsmMemo_avgprob_.8uncrtnty_gn_3ratio_loco"
+    # group=f"offline_combEnsmMemo_avgprob_.8uncrtnty_gn_3ratio_loco"
     
     name= group + f"_{LEAVE_OUT}"
     wandb.init(project="tta", entity="mahdigilany", name=name, group=group)

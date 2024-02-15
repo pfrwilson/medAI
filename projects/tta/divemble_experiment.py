@@ -231,7 +231,8 @@ class Divemblexperiment(BaselineExperiment):
                     ) for i in range(self.config.num_ensembles)
                 ]
                 
-                var_loss, cov_loss = diversity_loss_fn(torch.stack(list_reprs))
+                # var_loss, cov_loss = diversity_loss_fn(torch.stack(list_reprs))
+                var_loss, cov_loss = diversity_loss_fn(logits)
                 diversity_loss = self.config.var_reg*var_loss + self.config.cov_reg*cov_loss
                 
                 loss = sum(ce_losses) + diversity_loss                
