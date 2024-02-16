@@ -1,8 +1,8 @@
 from typing import Any
-from skimage.transform import resize
-import numpy as np
-from tqdm import tqdm
 
+import numpy as np
+from skimage.transform import resize
+from tqdm import tqdm
 
 __all__ = ["PatchView"]
 
@@ -113,13 +113,13 @@ class PatchView:
                 # if the mask is of a different shape than the image,
                 # we need to adjust the coordinates to be relative to the mask
                 if X != X_mask:
-                    x1 = int(x1 / X * X_mask)
-                    x2 = int(x2 / X * X_mask)
+                    x1_mask = int(x1 / X * X_mask)
+                    x2_mask = int(x2 / X * X_mask)
                 if Y != Y_mask:
-                    y1 = int(y1 / Y * Y_mask)
-                    y2 = int(y2 / Y * Y_mask)
+                    y1_mask = int(y1 / Y * Y_mask)
+                    y2_mask = int(y2 / Y * Y_mask)
 
-                if np.mean(mask[x1:x2, y1:y2]) >= threshold:
+                if np.mean(mask[x1_mask:x2_mask, y1_mask:y2_mask]) >= threshold:
                     filtered_positions.append([x1, y1, x2, y2])
 
             positions = np.array(filtered_positions)
