@@ -115,9 +115,13 @@ class PatchView:
                 if X != X_mask:
                     x1_mask = int(x1 / X * X_mask)
                     x2_mask = int(x2 / X * X_mask)
+                else: 
+                    x1_mask, x2_mask = x1, x2
                 if Y != Y_mask:
                     y1_mask = int(y1 / Y * Y_mask)
                     y2_mask = int(y2 / Y * Y_mask)
+                else:
+                    y1_mask, y2_mask = y1, y2
 
                 if np.mean(mask[x1_mask:x2_mask, y1_mask:y2_mask]) >= threshold:
                     filtered_positions.append([x1, y1, x2, y2])
@@ -212,3 +216,6 @@ class PatchView:
             ax.plot([y1, y2, y2, y1, y1], [x1, x1, x2, x2, x1], "r")
         ax.axis("off")
         return ax
+
+
+
