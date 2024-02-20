@@ -110,11 +110,12 @@ class Divemblexperiment(BaselineExperiment):
         self.list_fe_models, self.list_linears = self.setup_model()
         
         params = []
-        for model in self.list_fe_models:
-            params.append({'params': model.parameters()})
-        # for linear in self.list_linears:
-        #     params.append({'params': linear.parameters()})
-        params.append({'params': self.shared_linear.parameters()})
+        # for model in self.list_fe_models:
+        #     params.append({'params': model.parameters()})
+        for linear in self.list_linears:
+            params.append({'params': linear.parameters()})
+        params.append({'params': self.shared_fe_model.parameters()})
+        # params.append({'params': self.shared_linear.parameters()})
         
         self.optimizer = optim.Adam(
             params,
@@ -194,19 +195,21 @@ class Divemblexperiment(BaselineExperiment):
             )
 
     def setup_model(self):
-        models = [super(Divemblexperiment, self).setup_model().cuda()
-                     for _ in range(self.config.num_ensembles)]
-        global_pools = [SelectAdaptivePool2d(pool_type='avg',flatten=True,input_fmt='NCHW').cuda() 
-                        for _ in range(self.config.num_ensembles)]
+        # models = [super(Divemblexperiment, self).setup_model().cuda()
+        #              for _ in range(self.config.num_ensembles)]
+        # global_pools = [SelectAdaptivePool2d(pool_type='avg',flatten=True,input_fmt='NCHW').cuda() 
+        #                 for _ in range(self.config.num_ensembles)]
+        # fe_models = [nn.Sequential(TimmFeatureExtractorWrapper(model), global_pool) 
+        #              for model, global_pool in zip(models, global_pools)]
+        model = super(Divemblexperiment, self).setup_model().cuda()
+        global_pool = SelectAdaptivePool2d(pool_type='avg',flatten=True,input_fmt='NCHW').cuda()
+        self.shared_fe_model = nn.Sequential(TimmFeatureExtractorWrapper(model), global_pool)
+        fe_models = [self.shared_fe_model for _ in range(self.config.num_ensembles)]
         
-        fe_models = [nn.Sequential(TimmFeatureExtractorWrapper(model), global_pool) 
-                     for model, global_pool in zip(models, global_pools)]
-        
-        # linears = [nn.Linear(512, self.config.model_config.num_classes).cuda()
-                #    for _ in range(self.config.num_ensembles)]
-            
-        self.shared_linear = nn.Linear(512, self.config.model_config.num_classes).cuda()
-        linears = [self.shared_linear for _ in range(self.config.num_ensembles)]
+        linears = [nn.Linear(512, self.config.model_config.num_classes).cuda()
+                   for _ in range(self.config.num_ensembles)]            
+        # self.shared_linear = nn.Linear(512, self.config.model_config.num_classes).cuda()
+        # linears = [self.shared_linear for _ in range(self.config.num_ensembles)]
             
         return fe_models, linears
 
@@ -222,8 +225,10 @@ class Divemblexperiment(BaselineExperiment):
                 labels = labels.cuda()
                 
                 # Forward pass
-                list_reprs = [model(images) for model in self.list_fe_models]
-                logits = torch.stack([linear(repr) for linear, repr in zip(self.list_linears, list_reprs)])
+                # list_reprs = [model(images) for model in self.list_fe_models]
+                # logits = torch.stack([linear(repr) for linear, repr in zip(self.list_linears, list_reprs)])
+                stacked_reprs = self.shared_fe_model(images).repeat(self.config.num_ensembles, 1, 1)
+                logits = torch.stack([linear(stacked_reprs[i, ...]) for i, linear in enumerate(self.list_linears)])
                 
                 ce_losses = [nn.CrossEntropyLoss()(
                     logits[i, ...],

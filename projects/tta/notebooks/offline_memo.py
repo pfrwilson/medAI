@@ -39,7 +39,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
+for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #
     print("Leave out", LEAVE_OUT)
 
     ## Data Finetuning
@@ -85,7 +85,11 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
     #     patch_options=config.patch_config,
     #     debug=config.debug,
     # )
-
+    
+    if isinstance(config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+        if config.cohort_selection_config.leave_out == "UVA":
+            config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
+    
     test_ds = ExactNCT2013RFImagePatches(
         split="test",
         transform=Transform(augment=True),
@@ -119,7 +123,9 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
                         num_channels=channels
                         ))
 
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_crtd3ratio_loco/baseline_gn_crtd3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_crtd3ratio_loco/baseline_gn_crtd3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_avgprob_3ratio_loco/baseline_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+
 
     model.load_state_dict(torch.load(CHECkPOINT_PATH)['model'])
     model.eval()
@@ -128,7 +134,7 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
     
     ## MEMO
     loader = test_loader
-    enable_memo = False
+    enable_memo = True
 
     from memo_experiment import batched_marginal_entropy
     metric_calculator = MetricCalculator()
@@ -149,9 +155,9 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
         adaptation_model = deepcopy(model)
         adaptation_model.eval()
         if enable_memo:
-            optimizer = optim.SGD(adaptation_model.parameters(), lr=4e-5)
+            optimizer = optim.SGD(adaptation_model.parameters(), lr=1e-4)
             
-            for j in range(1):
+            for j in range(2):
                 outputs = adaptation_model(_images_augs).reshape(batch_size, aug_size, -1)  
                 loss, logits = batched_marginal_entropy(outputs)
                 optimizer.zero_grad()
@@ -190,7 +196,8 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #,
     ## Log with wandb
     import wandb
     # group=f"offline_memo_gn_3ratio_loco"
-    group=f"offline_baseline_gn_avgprob_3ratio_loco"
+    # group=f"offline_baseline_5e-4lr_gn_avgprob_3ratio_loco"
+    group=f"offline_newBaseline_1e-4lr2ep_gn_avgprob_3ratio_loco"
     name= group + f"_{LEAVE_OUT}"
     wandb.init(project="tta", entity="mahdigilany", name=name, group=group)
     # os.environ["WANDB_MODE"] = "enabled"

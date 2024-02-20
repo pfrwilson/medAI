@@ -1,23 +1,25 @@
-# ensemble experiment
-NUM_ENSEMBLES=5
-INSTANCE_NORM=False
-USE_BATCH_NORM=False
-GROUP="ensemble_${NUM_ENSEMBLES}mdls_gn_avgprob_3ratio_loco"
+# # ensemble experiment
+# NUM_ENSEMBLES=5
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=False
+# GROUP="ensemble_${NUM_ENSEMBLES}mdls_gn_3ratio_loco2"
 
-for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"  
-do
-    python ensemble_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
-        --num_ensembles $NUM_ENSEMBLES \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM \
-        --benign_to_cancer_ratio_train 3.0       
-done 
+# for CENTER in "JH" "PCC" "PMCC" "UVA" "CRCEO"  
+# do
+#     python ensemble_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --slurm_qos "deadline" \
+#         --slurm_account "deadline" \
+#         --num_ensembles $NUM_ENSEMBLES \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --benign_to_cancer_ratio_train 3.0       
+# done 
 
 
 # # sngp experiment
@@ -43,13 +45,14 @@ done
 
 # # baseline experiment
 # INSTANCE_NORM=False
-# USE_BATCH_NORM=False
-# GROUP="baseline_gn_avgprob_3ratio_loco"
+# USE_BATCH_NORM=True
+# # GROUP="baseline_gn_avgprob_3ratio_loco"
+# GROUP="baseline_bn_avgprob_3ratio_loco"
 # # GROUP="baseline_gn_avgprob_3ratio_1poly_loco"
 # # GROUP="sam_baseline_gn_e-4rho_loco"
 # # GROUP="baseline_bn_inst-nrm_loco"
 
-# for CENTER in "JH" "PMCC" "PCC" "CRCEO" "UVA" # 
+# for CENTER in "CRCEO" # "UVA" "JH" "PMCC" "PCC" 
 # do
 #     python baseline_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -73,9 +76,9 @@ done
 # # ttt experiment
 # QUERY_PATCH=True
 # SUPPORT_PATCHES=0
-# GROUP="ttt_${SUPPORT_PATCHES}+1sprt_JT_0.1beta_loco"
+# GROUP="ttt_${SUPPORT_PATCHES}+1sprt_0.1beta_JT_3ratio_loco"
 
-# for CENTER in  "PMCC" "UVA" "CRCEO" #"JH" "PCC"
+# for CENTER in  "JH" "PCC" "PMCC"  "CRCEO" "UVA" #
 # do
 #     python ttt_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -83,36 +86,40 @@ done
 #         --cluster "slurm" \
 #         --slurm_gres "gpu:a40:1" \
 #         --cohort_selection_config "loco" \
+#         --benign_to_cancer_ratio_train 3.0 \
 #         --leave_out $CENTER \
 #         --include_query_patch $QUERY_PATCH \
 #         --num_support_patches $SUPPORT_PATCHES \
 #         --joint_training True \
 #         --adaptation_steps 1 \
-#         --adaptation_lr 0.0001 \
+#         --adaptation_lr 0.001 \
 #         --beta_byol 0.1
 # done 
 
 
-# # mt3 experiment
-# QUERY_PATCH=True
-# SUPPORT_PATCHES=0
-# GROUP="mt3_${SUPPORT_PATCHES}+1sprt_0.1beta_loco"
+# mt3 experiment
+QUERY_PATCH=True
+SUPPORT_PATCHES=0
+GROUP="mt3_${SUPPORT_PATCHES}+1sprt_0.1beta_e-3innlr_3ratio_loco"
 
-# for CENTER in  "PMCC" "UVA" "CRCEO" # "JH" "PCC"  
-# do
-#     python mt3_experiment.py \
-#         --name "${GROUP}_${CENTER}" \
-#         --group "${GROUP}" \
-#         --cluster "slurm" \
-#         --slurm_gres "gpu:a40:1" \
-#         --cohort_selection_config "loco" \
-#         --leave_out $CENTER \
-#         --include_query_patch $QUERY_PATCH \
-#         --num_support_patches $SUPPORT_PATCHES \
-#         --inner_steps 1 \
-#         --inner_lr 0.001 \
-#         --beta_byol 0.1
-# done 
+for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO" # 
+do
+    python mt3_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
+        --cluster "slurm" \
+        --slurm_gres "gpu:a40:1" \
+        --slurm_qos "deadline" \
+        --slurm_account "deadline" \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --include_query_patch $QUERY_PATCH \
+        --num_support_patches $SUPPORT_PATCHES \
+        --benign_to_cancer_ratio_train 3.0 \
+        --inner_steps 1 \
+        --inner_lr 0.001 \
+        --beta_byol 0.1
+done 
 
 
 # # vicreg pretrain experiment
@@ -195,25 +202,28 @@ done
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
 # # GROUP="vicreg_1024-300finetune_1e-3lr_gn_loco"
-# GROUP="vicreg_1024-300finetune_1e-3lr_gn_3ratio_loco"
+# GROUP="vicreg_1024-300finetune_1e-4lr_avgprob_gn_crtd3ratio_loco"
 # # checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_loco"
 # checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_3ratio_loco"
-# for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO"  
+# for CENTER in   "PMCC" "UVA" "CRCEO"  # "JH" "PCC"
 # do
 #     python finetune_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
 #         --group "${GROUP}" \
 #         --cluster "slurm" \
 #         --slurm_gres "gpu:a40:1" \
+#         --slurm_qos "deadline" \
+#         --slurm_account "deadline" \
 #         --cohort_selection_config "loco" \
 #         --leave_out $CENTER \
+#         --benign_to_cancer_ratio_train 3.0 \
 #         --instance_norm $INSTANCE_NORM \
 #         --use_batch_norm $USE_BATCH_NORM \
 #         --epochs 50 \
 #         --train_backbone True \
 #         --checkpoint_path_name $checkpoint_path_name \
-#         --backbone_lr 0.001 \
-#         --head_lr 0.001
+#         --backbone_lr 0.0001 \
+#         --head_lr 0.0001
 # done
 
 
@@ -221,10 +231,11 @@ done
 # NUM_ENSEMBLES=5
 # INSTANCE_NORM=False
 # USE_BATCH_NORM=False
-# GROUP="Divemble-logt_gn_${NUM_ENSEMBLES}mdls_0.5var0.05cov_3ratio_loco"
+# GROUP="ensemble-shrd-fe_gn_${NUM_ENSEMBLES}mdls_3ratio_loco"
+# # GROUP="Divemble-logt_gn_${NUM_ENSEMBLES}mdls_0.5var0.05cov_3ratio_loco"
 # # GROUP="Divemble-shrd_gn_${NUM_ENSEMBLES}mdls_0var0.5cov_3ratio_loco"
 # # GROUP="Divemble_gn_${NUM_ENSEMBLES}mdls_crctd_loco"
-# for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO"
+# for CENTER in  "PCC" "PMCC" "UVA" "CRCEO" # "JH" 
 # do
 #     python divemble_experiment.py \
 #         --name "${GROUP}_${CENTER}" \
@@ -238,6 +249,6 @@ done
 #         --use_batch_norm $USE_BATCH_NORM \
 #         --epochs 50 \
 #         --benign_to_cancer_ratio_train 3.0 \
-#         --var_reg 0.5 \
-#         --cov_reg 0.05
+#         --var_reg 0.0 \
+#         --cov_reg 0.0
 # done

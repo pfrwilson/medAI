@@ -46,8 +46,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     ## Data Finetuning
     ###### No support dataset ######
 
-    from vicreg_pretrain_experiment import PretrainConfig
-    config = PretrainConfig(cohort_selection_config=LeaveOneCenterOutCohortSelectionOptions(leave_out=f"{LEAVE_OUT}"))
+    from ensemble_experiment import EnsembleConfig
+    config = EnsembleConfig(cohort_selection_config=LeaveOneCenterOutCohortSelectionOptions(leave_out=f"{LEAVE_OUT}"),
+    )
 
     from baseline_experiment import BaselineConfig
     from torchvision.transforms import v2 as T
@@ -89,6 +90,10 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     #     patch_options=config.patch_config,
     #     debug=config.debug,
     # )
+    
+    if isinstance(config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+        if config.cohort_selection_config.leave_out == "UVA":
+            config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
 
     test_ds = ExactNCT2013RFImagePatches(
         split="test",
@@ -184,20 +189,30 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     temp = 1.0
     beta = 0.0
     if LEAVE_OUT == "JH":
-        temp = 1.6793
-        beta = -1.0168
+    #     temp = 1.6793
+    #     beta = -1.0168
+        temp = 0.9253
+        beta = -1.0273
     elif LEAVE_OUT == "PCC":
-        temp = 1.5950
-        beta = -0.8514
+    #     temp = 1.5950
+    #     beta = -0.8514
+        temp = 1.0075
+        beta = -0.8614
     elif LEAVE_OUT == "PMCC":
-        temp = 0.6312
-        beta = -1.0017
+    #     temp = 0.6312
+    #     beta = -1.0017
+        temp = 0.9020
+        beta = -1.0609
     elif LEAVE_OUT == "UVA":
-        temp = 0.9333
-        beta = -0.7474
+    #     temp = 0.9333
+    #     beta = -0.7474
+        temp = 1.6528
+        beta = -0.6192
     elif LEAVE_OUT == "CRCEO":
-        temp = 1.2787
-        beta = -0.8716
+    #     temp = 1.2787
+    #     beta = -0.8716
+        temp = 0.8515
+        beta = -0.8461
         
     temp = torch.tensor(temp).cuda()
     beta = torch.tensor(beta).cuda()
@@ -250,9 +265,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                 list_losses = []
                 for k in range(5):
                     ## SPRT
-                    # loss, logits = batched_marginal_entropy(stacked_logits[k,...])
+                    loss, logits = batched_marginal_entropy(stacked_logits[k,...])
                     ## Combined Cross-Entropy
-                    loss = nn.CrossEntropyLoss()(marginal_probs[k,...], avg_marginal_probs)
+                    # loss = nn.CrossEntropyLoss()(marginal_probs[k,...], avg_marginal_probs)
                     list_losses.append(loss.mean())
                 # Backward pass
                 sum(list_losses).backward()
@@ -297,7 +312,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
         
     ## Log with wandb
     import wandb
-    group=f"offline_sprtNewEnsmMemo_gn_3ratio_loco"
+    group=f"offline_sprtNewEnsmMemo_crct_gn_3ratio_loco"
+    # group=f"offline_sprtNewEnsmMemo_.8uncrtnty_gn_3ratio_loco"
+    
     # group=f"offline_sprtEnsmMemo_gn_3ratio_loco"
     # group=f"offline_sprtEnsmMemo_avgprob_gn_3ratio_loco"
     # group=f"offline_sprtEnsmMemo_avgprob_.8uncrtnty_gn_3ratio_loco"

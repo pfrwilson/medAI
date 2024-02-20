@@ -40,7 +40,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: # 
+for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: # 
     print("Leave out", LEAVE_OUT)
     
     ## Data Finetuning
@@ -83,13 +83,17 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
             return -1, patch, label, item
 
 
-    # val_ds = ExactNCT2013RFImagePatches(
-    #     split="val",
-    #     transform=Transform(augment=False),
-    #     cohort_selection_options=config.cohort_selection_config,
-    #     patch_options=config.patch_config,
-    #     debug=config.debug,
-    # )
+    val_ds = ExactNCT2013RFImagePatches(
+        split="val",
+        transform=Transform(augment=False),
+        cohort_selection_options=config.cohort_selection_config,
+        patch_options=config.patch_config,
+        debug=config.debug,
+    )
+    
+    if isinstance(config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+        if config.cohort_selection_config.leave_out == "UVA":
+            config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
 
     test_ds = ExactNCT2013RFImagePatches(
         split="test",
@@ -100,9 +104,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     )
 
 
-    # val_loader = DataLoader(
-    #     val_ds, batch_size=config.batch_size, shuffle=True, num_workers=4
-    # )
+    val_loader = DataLoader(
+        val_ds, batch_size=config.batch_size, shuffle=True, num_workers=4
+    )
 
     test_loader = DataLoader(
         test_ds, batch_size=config.batch_size, shuffle=False, num_workers=4
@@ -185,20 +189,30 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     temp = 1.0
     beta = 0.0
     if LEAVE_OUT == "JH":
-        temp = 1.6793
-        beta = -1.0168
+    #     temp = 1.6793
+    #     beta = -1.0168
+        temp = 0.9253
+        beta = -1.0273
     elif LEAVE_OUT == "PCC":
-        temp = 1.5950
-        beta = -0.8514
+    #     temp = 1.5950
+    #     beta = -0.8514
+        temp = 1.0075
+        beta = -0.8614
     elif LEAVE_OUT == "PMCC":
-        temp = 0.6312
-        beta = -1.0017
+    #     temp = 0.6312
+    #     beta = -1.0017
+        temp = 0.9020
+        beta = -1.0609
     elif LEAVE_OUT == "UVA":
-        temp = 0.9333
-        beta = -0.7474
+    #     temp = 0.9333
+    #     beta = -0.7474
+        temp = 1.6528
+        beta = -0.6192
     elif LEAVE_OUT == "CRCEO":
-        temp = 1.2787
-        beta = -0.8716
+    #     temp = 1.2787
+    #     beta = -0.8716
+        temp = 0.8515
+        beta = -0.8461
         
     temp = torch.tensor(temp).cuda()
     beta = torch.tensor(beta).cuda()
@@ -208,8 +222,9 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     # loader = test_test_loader
     loader = test_loader
     enable_pseudo_label = True
-    temp_scale = False
-    certain_threshold = 0.8
+    temp_scale = True
+    certain_threshold = 0.4
+    thr = 0.25
 
     metric_calculator = MetricCalculator()
     desc = "test"
@@ -244,7 +259,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                 
                 list_losses = []
                 for k, outputs in enumerate(adaptation_model_list):
-                    loss = nn.CrossEntropyLoss()(stacked_logits[k, ...], F.softmax(stacked_logits, dim=-1).mean(dim=0).argmax(dim=-1))
+                    loss = nn.CrossEntropyLoss()(stacked_logits[k, ...], (F.softmax(stacked_logits, dim=-1).mean(dim=0)[:, 1] >= thr).to(torch.long))
                     list_losses.append(loss.mean())
                 # Backward pass
                 sum(list_losses).backward()
@@ -288,7 +303,13 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
         
     ## Log with wandb
     import wandb
-    group=f"offline_combNewEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
+    # group=f"offline_combNewEnsmPsdo_0.3thr_gn_3ratio_loco"
+    # group=f"offline_combNewEnsmPsdo_0.25thr_.7uncrtnty_gn_3ratio_loco"
+    group=f"offline_combNewEnsmPsdo_tempsc_0.25thr_gn_3ratio_loco"
+    
+    # group=f"offline_combNewEnsmPsdo_gn_3ratio_loco"
+    # group=f"offline_combNewEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
+    
     # group=f"offline_combEnsmPsdo_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_.8uncrtnty_gn_3ratio_loco"
     # group=f"offline_combEnsmPsdo_avgprob_gn_3ratio_loco"

@@ -197,7 +197,11 @@ class FinetuneExperiment(BaselineExperiment):
             patch_options=self.config.patch_config,
             debug=self.config.debug,
         )
-
+        
+        if isinstance(self.config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+            if self.config.cohort_selection_config.leave_out == "UVA":
+                self.config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
+                
         test_ds = ExactNCT2013RFImagePatches(
             split="test",
             transform=Transform(augment=True),
