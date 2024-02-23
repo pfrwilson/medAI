@@ -1,10 +1,13 @@
-from torch.utils.data import Dataset 
-from .data_access import data_accessor
 import typing as tp
+
+from torch.utils.data import Dataset
 from tqdm import tqdm
+
+from .data_access import data_accessor
 
 
 class BModeDatasetV1(Dataset): 
+
     """Dataset for B-mode images.
 
     Samples are dictionaries with the following keys:
@@ -25,6 +28,19 @@ class BModeDatasetV1(Dataset):
         transform (callable): Transform to apply to each sample.
         frames (str): If 'first', only the first frame is returned. If 'all', all frames are returned.
     """
+
+    DATA_KEY_PSA = 'psa'
+    DATA_KEY_PRIMARY_GRADE = 'primary_grade'
+    DATA_KEY_SECONDARY_GRADE = 'secondary_grade'
+    DATA_KEY_AGE = 'age'
+    DATA_KEY_FAMILY_HISTORY = 'family_history'
+    DATA_KEY_CORE_ID = 'core_id'
+    DATA_KEY_FRAME_IDX = 'frame_idx'
+    DATA_KEY_BMODE = 'bmode'
+    DATA_KEY_PROSTATE_MASK = 'prostate_mask'
+    DATA_KEY_NEEDLE_MASK = 'needle_mask'
+    DATA_KEY_CENTER = 'center'
+    
 
     def __init__(self, core_ids, transform=None, frames: tp.Literal['first', 'all']='first'): 
         self.metadata = data_accessor.get_metadata_table().copy()
