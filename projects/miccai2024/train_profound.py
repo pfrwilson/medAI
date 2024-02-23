@@ -1,18 +1,22 @@
-# Do arg parsing before time-consuming imports
+import logging
+import os
+import typing as tp
 
+import numpy as np
+import torch
+import torch.nn as nn
+from einops import rearrange, repeat
+from matplotlib import pyplot as plt
+from medAI.utils.reproducibiliy import (
+    get_all_rng_states,
+    set_all_rng_states,
+    set_global_seed,
+)
+from torch.nn import functional as F
+from tqdm import tqdm
 
-PROMPT_OPTIONS = [
-    "task",
-    "anatomical",
-    "psa",
-    "age",
-    "family_history",
-    "prostate_mask",
-    "dense_cnn_image_features",
-    "sparse_cnn_maskpool_features_needle",
-    "sparse_cnn_maskpool_features_prostate",
-    "sparse_cnn_patch_features",
-]
+import wandb
+from src.data_factory import BModeDataFactoryV1
 
 
 def parse_args():
@@ -36,12 +40,15 @@ def parse_args():
     group.add_argument("--batch_size", type=int, default=1, help="The batch size to use for training.")
     group.add_argument("--augmentations", type=str, default="translate", help="The augmentations to use for training.")
     group.add_argument("--remove_benign_cores_from_positive_patients", action="store_true", help="If True, removes benign cores from positive patients (training only).")
+    group.add_argument("--image_size", type=int, default=1024, help="The size to use for the images.")
+    group.add_argument("--mask_size", type=int, default=256, help="The size to use for the masks.")
 
     group = parser.add_argument_group("Training", "Arguments related to training.")
     group.add_argument("--optimizer", type=str, default="adamw", help="The optimizer to use for training.")
     group.add_argument("--lr", type=float, default=1e-5, help="LR for the model.")
     group.add_argument("--encoder_lr", type=float, default=1e-5, help="LR for the encoder part of the model.")
     group.add_argument("--warmup_lr", type=float, default=1e-4, help="LR for the warmup, frozen encoder part.")
+    group.add_argument("--cnn_lr", type=float, default=1e-5, help="LR for the CNN part of the model.")
     group.add_argument("--warmup_epochs", type=int, default=5, help="The number of epochs to train the warmup, frozen encoder part.")
     group.add_argument("--wd", type=float, default=0, help="The weight decay to use for training.")
     group.add_argument("--epochs", type=int, default=30, help="The number of epochs to train for in terms of LR scheduler.")
@@ -51,32 +58,24 @@ def parse_args():
 
     # MODEL
     group = parser.add_argument_group("Model", "Arguments related to the model.")
-    group.add_argument('--model_type', choices=('ProFoundNet', 'SAM_UNETR'), default='ProFoundNet', help="The model to use.")
-    args, _ = parser.parse_known_args()
-    model_type = args.model_type
-    if model_type == 'ProFoundNet':
-        group.add_argument("--backbone", type=str, choices=('sam', 'medsam', 'sam_med2d'), default='medsam')
-        group.add_argument("--prompts", type=str, nargs="+", default=["task", "anatomical", "psa", "age", "family_history"], help="The prompts to use for the model.",
-                           choices=PROMPT_OPTIONS)
-        group.add_argument("--prompt_dropout", type=float, default=0.0, help="The dropout to use for the prompts.")
-        group.add_argument("--cnn_mode", choices=('dense_prompt', 'sparse_prompt', 'disabled'), type = lambda x: None if x == "disabled" else str(x), help="Mode to use for the CNN branch.", default="disabled")
-        group.add_argument("--replace_patch_embed", action="store_true", help="If True, replaces the patch embedding with a learned convolutional patch embedding.")
-        group.add_argument("--sparse_cnn_backbone_path", type=str, default=None, help="The path to the sparse CNN backbone to use. If None, randomly initializes and trains the backbone.")
-    elif model_type == 'SAM_UNETR':
-        group.add_argument("--backbone", type=str, choices=('sam', 'medsam'), default='sam', help="The backbone to use for the model.")
+    ProFound.add_arguments(group)
 
     # LOSS
-    parser.add_argument("--n_loss_terms", type=int, default=1, help="The number of loss terms to use.")
+    parser.add_argument("--n_loss_terms", type=int, default=1, help="""The number of loss terms to use.
+                        Although we found no benefit beyond using a single masked CE loss, the code supports multiple loss terms.""")
     args, _ = parser.parse_known_args()
     n_loss_terms = args.n_loss_terms
     for i in range(n_loss_terms):
         group = parser.add_argument_group(f"Loss term {i}", f"Arguments related to loss term {i}.")
         group.add_argument(f"--loss_{i}_name", type=str, default="valid_region", choices=('valid_region',), help="The name of the loss function to use."),
         group.add_argument(f"--loss_{i}_base_loss_name", type=str, default="ce", 
-                           choices=('ce', 'gce', 'mae', 'mil'), help="The name of the lower-level loss function to use.")
+                           choices=('ce', 'gce', 'mae', 'mil'), 
+                           help="""The name of the lower-level loss function to use. Our experiments showed best performance with simple CE loss, but 
+                           due to weak supervision and label noise, we also experimented with GCE, MAE, and MIL. However, we found no benefit beyond using CE loss.""")
         def str2bool(str): 
             return True if str.lower() == 'true' else False
-        group.add_argument(f"--loss_{i}_pos_weight", type=float, default=1.0, help="The positive class weight for the loss function.")
+        group.add_argument(f"--loss_{i}_pos_weight", type=float, default=1.0, help="""The positive class weight for the loss function. If using a large ratio of benign to
+                           cancer cores in training, it is recommended to increase this value to 2 or 3 to account for the class imbalance.""")
         group.add_argument(f"--loss_{i}_prostate_mask", type=str2bool, default=True, help="If True, the loss will only be applied inside the prostate mask.")
         group.add_argument(f"--loss_{i}_needle_mask", type=str2bool, default=True, help="If True, the loss will only be applied inside the needle mask.")
         group.add_argument(f"--loss_{i}_weight", type=float, default=1.0, help="The weight to use for the loss function.")
@@ -88,11 +87,11 @@ def parse_args():
     group.add_argument("--log_images", action="store_true", help="If True, logs images to wandb.")
 
     group = parser.add_argument_group("Misc", "Miscellaneous arguments.")
-    group.add_argument("--encoder_weights_path", type=str, default=None, help="The path to the encoder weights to use.")
+    group.add_argument("--encoder_weights_path", type=str, default=None, help="The path to the encoder weights to use. If None, uses the Foundation Model initialization")
     group.add_argument("--encoder_load_mode", type=str, default="none", choices=("dino_medsam", "ibot_medsam", "image_encoder", "none"), help="The mode to use for loading the encoder weights.")
     group.add_argument("--seed", type=int, default=42, help="The seed to use for training.")
     group.add_argument("--use_amp", action="store_true", help="If True, uses automatic mixed precision.")
-    group.add_argument("--device", type=str, default='auto', help="The device to use for training. If 'auto', uses cuda if available, otherwise cpu.")
+    group.add_argument("--device", type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help="The device to use for training")
     group.add_argument("--exp_dir", type=str, default="experiments/default", help="The directory to use for the experiment.")
     group.add_argument("--checkpoint_dir", type=str, default=None, help="The directory to use for the checkpoints. If None, does not save checkpoints.")
     group.add_argument("--debug", action="store_true", help="If True, runs in debug mode.")
@@ -104,46 +103,13 @@ def parse_args():
     # fmt: on
 
 
-ARGS = parse_args()
-
-import logging
-import os
-import typing as tp
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from enum import StrEnum
-
-import hydra
-import medAI
-import numpy as np
-import torch
-import torch.nn as nn
-from einops import rearrange, repeat
-from matplotlib import pyplot as plt
-from medAI.metrics import dice_loss, dice_score
-from medAI.utils.reproducibiliy import (
-    get_all_rng_states,
-    set_all_rng_states,
-    set_global_seed,
-)
-from torch import optim
-from torch.nn import functional as F
-from tqdm import tqdm
-
-import wandb
-from src.data_factory import AlignedFilesSegmentationDataFactory, BModeDataFactoryV1
-
-if ARGS.device == "auto":
-    ARGS.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-
 class Experiment:
     def __init__(self, config):
         self.config = config
 
     def setup(self):
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.INFO if not self.config.debug else logging.DEBUG,
             format="%(asctime)s %(levelname)s %(message)s",
             handlers=[logging.StreamHandler()],
         )
@@ -186,9 +152,9 @@ class Experiment:
             self.model.load_state_dict(self.state["model"])
 
         self.setup_optimizer()
-
         if self.state is not None:
             self.optimizer.load_state_dict(self.state["optimizer"])
+            self.lr_scheduler.load_state_dict(self.state["lr_scheduler"])
 
         self.gradient_scaler = torch.cuda.amp.GradScaler()
         if self.state is not None:
@@ -205,28 +171,10 @@ class Experiment:
     def setup_model(self):
         logging.info("Setting up model")
 
-        if self.config.model_type == "ProFoundNet":
-            self.model = MedSAMWithPCAPrompts(
-                n_tasks=1,
-                prompts=self.config.prompts,
-                prompt_dropout=self.config.prompt_dropout,
-                sam_backbone=self.config.backbone,
-                replace_patch_embed=self.config.replace_patch_embed,
-                sparse_cnn_backbone_path=self.config.sparse_cnn_backbone_path,
-            )
-            if self.config.encoder_weights_path:
-                load_encoder_weights(
-                    self.model.medsam_model.image_encoder,
-                    self.config.encoder_weights_path,
-                    self.config.encoder_load_mode,
-                )
-
-        elif self.config.model_type == "SAM_UNETR":
-            self.model = SAM_UNETR_Wrapper(backbone=self.config.backbone)
+        self.model = ProFound.from_args(self.config)
 
         self.model.to(self.config.device)
         torch.compile(self.model)
-        self.model.freeze_backbone()  # freeze backbone for first few epochs
 
         # setup criterion
         loss_terms = []
@@ -257,55 +205,74 @@ class Experiment:
     def setup_optimizer(self):
         from torch.optim import AdamW
 
+        (
+            encoder_parameters,
+            warmup_parameters,
+            cnn_parameters,
+        ) = self.model.get_params_groups()
+
+        total_epochs = self.config.epochs
+        encoder_frozen_epochs = self.config.warmup_epochs
+        warmup_epochs = 5
+        niter_per_ep = len(self.train_loader)
+        warmup_lr_factor = self.config.warmup_lr / self.config.lr
         params = [
-            {
-                "params": self.model.get_encoder_parameters(),
-                "lr": self.config.encoder_lr,
-            },
-            {
-                "params": self.model.get_non_encoder_parameters(),
-                "lr": self.config.lr,
-            },
+            {"params": encoder_parameters, "lr": self.config.encoder_lr},
+            {"params": warmup_parameters, "lr": self.config.lr},
+            {"params": cnn_parameters, "lr": self.config.cnn_lr},
         ]
+
+        def compute_lr_multiplier(iter, is_encoder_or_cnn=True):
+            if iter < encoder_frozen_epochs * niter_per_ep:
+                if is_encoder_or_cnn:
+                    return 0
+                else:
+                    if iter < warmup_epochs * niter_per_ep:
+                        return (iter * warmup_lr_factor) / (
+                            warmup_epochs * niter_per_ep
+                        )
+                    else:
+                        cur_iter_in_frozen_phase = iter - warmup_epochs * niter_per_ep
+                        total_iter_in_frozen_phase = (
+                            encoder_frozen_epochs - warmup_epochs
+                        ) * niter_per_ep
+                        return (
+                            0.5
+                            * (
+                                1
+                                + np.cos(
+                                    np.pi
+                                    * cur_iter_in_frozen_phase
+                                    / (total_iter_in_frozen_phase)
+                                )
+                            )
+                            * warmup_lr_factor
+                        )
+            else:
+                iter -= encoder_frozen_epochs * niter_per_ep
+                if iter < warmup_epochs * niter_per_ep:
+                    return iter / (warmup_epochs * niter_per_ep)
+                else:
+                    cur_iter = iter - warmup_epochs * niter_per_ep
+                    total_iter = (
+                        total_epochs - warmup_epochs - encoder_frozen_epochs
+                    ) * niter_per_ep
+                    return 0.5 * (1 + np.cos(np.pi * cur_iter / total_iter))
+
         self.optimizer = AdamW(params, lr=self.config.lr, weight_decay=self.config.wd)
+        from torch.optim.lr_scheduler import LambdaLR
 
-        # instead of scheduler, we use a custom learning rate scheduler
-        # self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
-        #     self.optimizer,
-        #     warmup_epochs=5 * len(self.train_loader),
-        #     max_epochs=self.config.epochs * len(self.train_loader),
-        # )
-        from medAI.utils.cosine_scheduler import cosine_scheduler
-
-        self.lr_scheduler = cosine_scheduler(
-            self.config.lr,
-            final_value=0,
-            epochs=self.config.epochs,
-            warmup_epochs=5,
-            niter_per_ep=len(self.train_loader),
-            start_warmup_value=0,
-        )
-
-        self.warmup_optimizer = AdamW(
-            self.model.get_non_encoder_parameters(),
-            lr=self.config.warmup_lr,
-            weight_decay=self.config.wd,
+        self.lr_scheduler = LambdaLR(
+            self.optimizer,
+            [
+                lambda iter: compute_lr_multiplier(iter, is_encoder_or_cnn=True),
+                lambda iter: compute_lr_multiplier(iter, is_encoder_or_cnn=False),
+                lambda iter: compute_lr_multiplier(iter, is_encoder_or_cnn=True),
+            ],
         )
 
     def setup_data(self):
         logging.info("Setting up data")
-
-        if self.config.model_type == "ProFoundNet":
-            if self.config.backbone == "sam_med2d":
-                if self.config.replace_patch_embed:
-                    self.config.image_size, self.config.mask_size = 1024, 64
-                else:
-                    self.config.image_size, self.config.mask_size = 1024, 64
-            else:
-                self.config.image_size, self.config.mask_size = 1024, 256
-
-        elif self.config.model_type == "SAM_UNETR":
-            self.config.image_size, self.config.mask_size = 1024, 256
 
         data_factory = BModeDataFactoryV1(
             fold=self.config.fold,
@@ -391,31 +358,12 @@ class Experiment:
 
         accumulator = DataFrameCollector()
 
-        # if we are in the warmup stage, we use the warmup optimizer
-        # and freeze the backbone
-        if self.epoch < self.config.warmup_epochs:
-            optimizer = self.warmup_optimizer
-            stage = "warmup"
-        else:
-            self.model.unfreeze_backbone()
-            optimizer = self.optimizer
-            stage = "main"
-
         for train_iter, batch in enumerate(tqdm(loader, desc=desc)):
             batch_for_image_generation = (
                 batch.copy()
             )  # we pop some keys from batch, so we keep a copy for image generation
             if self.config.debug and train_iter > 10:
                 break
-
-            # If we are in the main training stage, we update the learning rate
-            if stage == "main":
-                iteration = train_iter + len(loader) * (
-                    self.epoch - self.config.warmup_epochs
-                )
-                cur_lr = self.lr_scheduler[iteration]
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = cur_lr
 
             # extracting relevant data from the batch
             bmode = batch.pop("bmode").to(self.config.device)
@@ -478,19 +426,34 @@ class Experiment:
             loss = loss / self.config.accumulate_grad_steps
             # backward pass
             if self.config.use_amp:
+                logging.debug("Backward pass")
                 self.gradient_scaler.scale(loss).backward()
             else:
+                logging.debug("Backward pass")
                 loss.backward()
 
             # gradient accumulation and optimizer step
+            if self.config.debug:
+                for param in self.optimizer.param_groups[1]["params"]:
+                    break
+                logging.debug(param.data.view(-1)[0])
+
             if (train_iter + 1) % self.config.accumulate_grad_steps == 0:
+                logging.debug("Optimizer step")
                 if self.config.use_amp:
-                    self.gradient_scaler.step(optimizer)
+                    self.gradient_scaler.step(self.optimizer)
                     self.gradient_scaler.update()
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                 else:
-                    optimizer.step()
-                    optimizer.zero_grad()
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+                if self.config.debug:
+                    for param in self.optimizer.param_groups[1]["params"]:
+                        break
+                    logging.debug(param.data.view(-1)[0])
+
+            self.lr_scheduler.step()
 
             # accumulate outputs
             accumulator(
@@ -505,7 +468,13 @@ class Experiment:
             step_metrics = {
                 "train_loss": loss.item() / self.config.accumulate_grad_steps
             }
-            step_metrics["lr"] = optimizer.param_groups[0]["lr"]
+            encoder_lr = self.optimizer.param_groups[0]["lr"]
+            main_lr = self.optimizer.param_groups[1]["lr"]
+            cnn_lr = self.optimizer.param_groups[2]["lr"]
+            step_metrics["encoder_lr"] = encoder_lr
+            step_metrics["main_lr"] = main_lr
+            step_metrics["cnn_lr"] = cnn_lr
+
             wandb.log(step_metrics)
 
             # log images
@@ -723,6 +692,7 @@ class Experiment:
                 "best_score": self.best_score,
                 "gradient_scaler": self.gradient_scaler.state_dict(),
                 "rng": get_all_rng_states(),
+                "lr_scheduler": self.lr_scheduler.state_dict(),
             },
             self.exp_state_path,
         )
@@ -739,6 +709,17 @@ class Experiment:
                 f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
             ),
         )
+        # save config as json file
+        with open(
+            os.path.join(
+                self.config.checkpoint_dir,
+                f"config.json",
+            ),
+            "w",
+        ) as f:
+            import json
+
+            json.dump(vars(self.config), f)
 
     def teardown(self):
         # remove experiment state file
@@ -847,19 +828,6 @@ def simple_mil_loss(
         loss += patch_losses_for_core_to_keep.mean()
 
     return loss
-
-
-def get_segmentation_loss_and_score(mask_logits, gt_mask):
-    B, C, H, W = mask_logits.shape
-
-    gt_mask = torch.nn.functional.interpolate(gt_mask.float(), size=(H, W))
-
-    ce_loss = torch.nn.functional.binary_cross_entropy_with_logits(mask_logits, gt_mask)
-    _dice_loss = dice_loss(mask_logits.sigmoid(), gt_mask)
-    loss = ce_loss + _dice_loss
-
-    _dice_score = dice_score(mask_logits.sigmoid(), gt_mask)
-    return loss, _dice_score
 
 
 class CancerDetectionLossBase(nn.Module):
@@ -971,10 +939,6 @@ class CancerDetectionSoftValidRegionLoss(CancerDetectionLossBase):
         return loss
 
 
-class CancerDetectionMILRegionLoss(nn.Module):
-    ...
-
-
 class MultiTermCanDetLoss(CancerDetectionLossBase):
     def __init__(self, loss_terms: list[CancerDetectionLossBase], weights: list[float]):
         super().__init__()
@@ -990,66 +954,16 @@ class MultiTermCanDetLoss(CancerDetectionLossBase):
         return loss
 
 
-CORE_LOCATIONS = [
-    "LML",
-    "RBL",
-    "LMM",
-    "RMM",
-    "LBL",
-    "LAM",
-    "RAM",
-    "RML",
-    "LBM",
-    "RAL",
-    "RBM",
-    "LAL",
-]
-
-
-class ModelInterface(nn.Module, ABC):
-    @abstractmethod
-    def forward(
-        self,
-        image=None,
-        task_id=None,
-        anatomical_location=None,
-        psa=None,
-        age=None,
-        family_history=None,
-        prostate_mask=None,
-        needle_mask=None,
-    ):
-        """Returns the model's heatmap logits."""
-
-    @abstractmethod
-    def get_encoder_parameters(self):
-        """Returns the parameters of the encoder (backbone)."""
-
-    @abstractmethod
-    def get_non_encoder_parameters(self):
-        """Returns the parameters of the non-encoder part of the model."""
-
-    def freeze_backbone(self):
-        """Freezes the backbone of the model."""
-        for param in self.get_encoder_parameters():
-            param.requires_grad = False
-
-    def unfreeze_backbone(self):
-        """Unfreezes the backbone of the model."""
-        for param in self.get_encoder_parameters():
-            param.requires_grad = True
-
-
-class MedSAMWithPCAPrompts(ModelInterface):
-    """
-    Wraps the SAM model to do unprompted segmentation.
-
-    Args:
-        freeze_backbone (bool): If True, freezes the backbone of the model.
-    """
-
-    
-    METADATA = "psa", "age", "family_history"
+class ProFound(nn.Module):
+    PROMPT_OPTIONS = [
+        "task",
+        "anatomical",
+        "psa",
+        "age",
+        "family_history",
+        "prostate_mask",
+        "sparse_cnn_patch_features",
+    ]
 
     def __init__(
         self,
@@ -1064,13 +978,14 @@ class MedSAMWithPCAPrompts(ModelInterface):
         super().__init__()
         self.prompts = prompts
         self.prompt_dropout = prompt_dropout
-        self.warmup_patch_embed = warmup_patch_embed
         self.replace_patch_embed = replace_patch_embed
         self.sparse_cnn_backbone_path = sparse_cnn_backbone_path
 
         for p in prompts:
-            if not p in PROMPT_OPTIONS:
-                raise ValueError(f"Unknown prompt option: {p}. Options are {PROMPT_OPTIONS}")
+            if not p in self.PROMPT_OPTIONS:
+                raise ValueError(
+                    f"Unknown prompt option: {p}. Options are {self.PROMPT_OPTIONS}"
+                )
 
         from medAI.modeling.sam import build_medsam, build_sam, build_sammed_2d
 
@@ -1083,7 +998,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
             self.image_size_for_features = 1024
         elif sam_backbone == "sam_med2d":
             self.medsam_model = build_sammed_2d()
-            
+
             if replace_patch_embed:
                 self.image_size_for_features = 1024
                 # sammed_2d has a different input size. Let's hack the model to accept 1024x1024 images
@@ -1106,98 +1021,64 @@ class MedSAMWithPCAPrompts(ModelInterface):
                     Rearrange("b c h w -> b h w c"),
                 )
                 self.medsam_model.image_encoder.patch_embed = new_patch_embed
-                warmup_patch_embed = True
             else:
+                # use the default patch embed which is designed for 256x256 images
                 self.image_size_for_features = 256
 
         # BUILD PROMPT MODULES
         EMBEDDING_DIM = 256
 
+        # null prompt - used for prompt dropout
+        self.null_prompt = nn.Parameter(torch.zeros(0, 0, EMBEDDING_DIM))
+
+        # used for multitask training, but not currently used
         self.task_prompt_module = nn.Embedding(n_tasks, EMBEDDING_DIM)
+
+        # 6 anatomical locations (mid-lateral, mid-medial, apex-lateral, apex-medial, base-lateral, base-medial)
         self.anatomical_prompt_module = nn.Embedding(6, EMBEDDING_DIM)
-        self.anatomical_null_prompt = torch.zeros(1, EMBEDDING_DIM)
+
         # embed floating point values to 256 dim
         self.psa_prompt_module = nn.Sequential(
             nn.Linear(1, 128),
             nn.ReLU(),
             nn.Linear(128, EMBEDDING_DIM),
         )
-        self.psa_null_prompt = torch.zeros(1, EMBEDDING_DIM)
+
+        # embed floating point values to 256 dim
         self.age_prompt_module = nn.Sequential(
             nn.Linear(1, 128),
             nn.ReLU(),
             nn.Linear(128, EMBEDDING_DIM),
         )
-        self.age_null_prompt = torch.zeros(1, EMBEDDING_DIM)
 
         # 3 values for family history: 0, 1, 2 (yes, no, unknown)
         self.family_history_prompt_module = nn.Embedding(3, EMBEDDING_DIM)
 
-        if "sparse_cnn_maskpool_features_prostate" or "sparse_cnn_maskpool_features_needle" in prompts:
-            from timm.models.resnet import ResNet, resnet18
+        # CNN for extracting patch features
+        from timm.models.resnet import resnet10t
 
-            self.sparse_cnn_maskpool = resnet18(
-                norm_layer=lambda chans: nn.GroupNorm(num_groups=8, num_channels=chans),
-                num_classes=EMBEDDING_DIM,
+        model = resnet10t(
+            in_chans=3,
+        )
+        model.fc = nn.Identity()
+        model = nn.Sequential(nn.InstanceNorm2d(3), model)
+        if sparse_cnn_backbone_path is not None:
+            state = torch.load(sparse_cnn_backbone_path, map_location="cpu")
+            model.load_state_dict(
+                {
+                    k.replace("backbone.", ""): v
+                    for k, v in state.items()
+                    if "backbone" in k
+                }
             )
-            output_dim = 512
-            self.sparse_cnn_maskpool_proj = nn.Linear(output_dim, EMBEDDING_DIM)
-        else: 
-            self.sparse_cnn_maskpool = None
-            self.sparse_cnn_maskpool_proj = None
+        self.patch_feature_cnn = model
 
-        if "dense_cnn_image_features" in prompts:
-            self.dense_feature_cnn = torch.nn.Sequential(
-                torch.nn.Conv2d(3, 64, 7, 2, 3),  # 1024 -> 512
-                torch.nn.ReLU(),
-                torch.nn.GroupNorm(8, 64),
-                torch.nn.MaxPool2d(3, 2, 1),  # 512 -> 256
-                torch.nn.Conv2d(64, 128, 3, 1, 1),
-                torch.nn.ReLU(),
-                torch.nn.GroupNorm(8, 128),
-                torch.nn.MaxPool2d(3, 2, 1),  # 256 -> 128
-                torch.nn.Conv2d(128, 256, 3, 1, 1),
-                torch.nn.ReLU(),
-                torch.nn.GroupNorm(8, 256),
-                torch.nn.MaxPool2d(3, 2, 1),  # 128 -> 64
-            )
-            if self.image_size_for_features == 256: 
-                self.dense_feature_cnn = nn.Sequential(
-                    self.dense_feature_cnn, 
-                    nn.MaxPool2d(4, 4) # 64 -> 16
-                )                
-        else: 
-            self.dense_feature_cnn = None
+        # project the CNN features to the prompt space
+        self.patch_feature_prompt_module = nn.Linear(512, EMBEDDING_DIM)
+        self.pad_token = nn.Parameter(
+            torch.zeros(EMBEDDING_DIM)
+        )  # for padding the number of patches to a fixed number in a minibatch
 
-        if "sparse_cnn_patch_features" in prompts:
-            from timm.models.resnet import resnet10t
-
-            if sparse_cnn_backbone_path is not None:
-                model = resnet10t(
-                    in_chans=3,
-                )
-                model.fc = nn.Identity()
-                model = nn.Sequential(nn.InstanceNorm2d(3), model)
-                state = torch.load(sparse_cnn_backbone_path)
-                model.load_state_dict({
-                    k.replace('backbone.', ''): v for k, v in state.items() if 'backbone' in k
-                })
-                for p in model.parameters():
-                    p.requires_grad = False
-                self.patch_feature_cnn = nn.Sequential(model, nn.Linear(512, EMBEDDING_DIM))
-            else: 
-                self.patch_feature_cnn = nn.Sequential(
-                    nn.InstanceNorm2d(3), 
-                    resnet10t(
-                    norm_layer=lambda chans: nn.GroupNorm(num_groups=8, num_channels=chans),
-                    num_classes=EMBEDDING_DIM)
-                )
-            self.pad_token = nn.Parameter(torch.zeros(EMBEDDING_DIM))
-        else:
-            self.patch_feature_cnn = None
-            self.pad_token = None
-
-       
     def forward(
         self,
         image=None,
@@ -1215,7 +1096,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
             image_resized_for_features = torch.nn.functional.interpolate(
                 image, size=(self.image_size_for_features, self.image_size_for_features)
             )
-        else: 
+        else:
             image_resized_for_features = image
         image_feats = self.medsam_model.image_encoder(image_resized_for_features)
 
@@ -1238,13 +1119,9 @@ class MedSAMWithPCAPrompts(ModelInterface):
             mask = None
 
         sparse_embedding, dense_embedding = self.medsam_model.prompt_encoder.forward(
-            None, None, mask  # no prompt - find prostate
+            None, None, mask
         )
         sparse_embedding = sparse_embedding.repeat_interleave(len(image), 0)
-
-        if "dense_cnn_image_features" in self.prompts:
-            cnn_embedding = self.dense_feature_cnn(image)
-            dense_embedding = cnn_embedding + dense_embedding
 
         if "task" in self.prompts:
             task_embedding = self.task_prompt_module(task_id)
@@ -1258,7 +1135,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
                 and self.training
                 and torch.rand(1) < self.prompt_dropout
             ):
-                anatomical_embedding = self.anatomical_null_prompt.repeat_interleave(
+                anatomical_embedding = self.null_prompt.repeat_interleave(
                     len(task_id), 0
                 )
             else:
@@ -1277,7 +1154,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
                 and self.training
                 and torch.rand(1) < self.prompt_dropout
             ):
-                psa_embedding = self.psa_null_prompt.repeat_interleave(len(task_id), 0)
+                psa_embedding = self.null_prompt.repeat_interleave(len(task_id), 0)
             else:
                 psa_embedding = self.psa_prompt_module(psa)
             psa_embedding = psa_embedding[:, None, :]
@@ -1290,7 +1167,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
                 and self.training
                 and torch.rand(1) < self.prompt_dropout
             ):
-                age_embedding = self.age_null_prompt.repeat_interleave(len(task_id), 0)
+                age_embedding = self.null_prompt.repeat_interleave(len(task_id), 0)
             else:
                 age_embedding = self.age_prompt_module(age)
             age_embedding = age_embedding[:, None, :]
@@ -1309,22 +1186,6 @@ class MedSAMWithPCAPrompts(ModelInterface):
             sparse_embedding = torch.cat(
                 [sparse_embedding, family_history_embedding], dim=1
             )
-
-        # CNN prompt idea
-        if "sparse_cnn_maskpool_features_needle" or "sparse_cnn_maskpool_features_prostate" in self.prompts:
-            from medAI.layers.mask_pool import MaskPool
-
-            if "sparse_cnn_maskpool_features_prostate" in self.prompts:
-                mask = prostate_mask.float()
-            else: 
-                mask = needle_mask.float()
-
-            cnn_input = image
-            cnn_embedding = self.sparse_cnn_maskpool.forward_features(cnn_input)
-            cnn_embedding = MaskPool()(cnn_embedding, needle_mask)
-            cnn_embedding = self.sparse_cnn_maskpool_proj(cnn_embedding)
-            cnn_embedding = cnn_embedding[:, None, :]
-            sparse_embedding = torch.cat([sparse_embedding, cnn_embedding], dim=1)
 
         if "sparse_cnn_patch_features" in self.prompts:
             # we need to extract patches from the images.
@@ -1355,6 +1216,7 @@ class MedSAMWithPCAPrompts(ModelInterface):
             positions = positions[:, [1, 0]]
             batch_indices = torch.tensor(batch_indices)
             patch_cnn_output = self.patch_feature_cnn(patches)
+            patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
             position_encoding_outputs = (
                 self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
                     positions[None, ...], image_size=(1024, 1024)
@@ -1373,7 +1235,9 @@ class MedSAMWithPCAPrompts(ModelInterface):
                 patch_cnn_sparse_embeddings[i, : len(e)] = e
                 patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
 
-            sparse_embedding = torch.cat([sparse_embedding, patch_cnn_sparse_embeddings], dim=1)
+            sparse_embedding = torch.cat(
+                [sparse_embedding, patch_cnn_sparse_embeddings], dim=1
+            )
 
         mask_logits = self.medsam_model.mask_decoder.forward(
             image_feats,
@@ -1384,79 +1248,105 @@ class MedSAMWithPCAPrompts(ModelInterface):
         )[0]
         return mask_logits
 
-    def get_encoder_parameters(self):
-        # should separate image encoder parameters from neck parameters
-        named_params = self.medsam_model.image_encoder.named_parameters()
-        named_params = [(k, p) for k, p in named_params if "neck" not in k]
-        if self.warmup_patch_embed:
-            named_params = [(k, p) for k, p in named_params if "patch_embed" not in k]
-        return [p for k, p in named_params]
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if (
+            self.sparse_cnn_backbone_path is not None
+            and self.patch_feature_cnn is not None
+        ):
+            self.patch_feature_cnn.eval()
 
-    def get_non_encoder_parameters(self):
+    def get_params_groups(self):
         from itertools import chain
 
-        params = chain(
+        encoder_parameters = [
+            p
+            for (k, p) in self.medsam_model.image_encoder.named_parameters()
+            if "neck" not in k
+        ]
+        warmup_parameters = chain(
             self.medsam_model.mask_decoder.parameters(),
             self.task_prompt_module.parameters(),
             self.anatomical_prompt_module.parameters(),
             self.psa_prompt_module.parameters(),
             self.age_prompt_module.parameters(),
+            [self.age_null_prompt],
+            [self.psa_null_prompt],
+            [self.anatomical_null_prompt],
             self.family_history_prompt_module.parameters(),
+            self.patch_feature_prompt_module.parameters(),
             self.medsam_model.image_encoder.neck.parameters(),
+            self.medsam_model.prompt_encoder.parameters(),
+            [self.pad_token],
         )
-        if self.sparse_cnn_maskpool is not None:
-            params = chain(params, self.sparse_cnn_maskpool.parameters())
-            params = chain(params, self.sparse_cnn_maskpool_proj.parameters())
-        if self.dense_feature_cnn is not None:
-            params = chain(params, self.dense_feature_cnn.parameters())
-        if self.patch_feature_cnn is not None:
-            params = chain(params, self.patch_feature_cnn.parameters())
-            params = chain(params, [self.pad_token])
-
-        if self.warmup_patch_embed:
-            params = chain(
-                params, self.medsam_model.image_encoder.patch_embed.parameters()
-            )
-
-        return params
-
-    def train(self, mode: bool = True): 
-        super().train(mode)
-        if self.sparse_cnn_backbone_path is not None and self.patch_feature_cnn is not None: 
-            self.patch_feature_cnn.eval()
-            
-
-class SAM_UNETR_Wrapper(ModelInterface):
-    def __init__(self, backbone: tp.Literal["sam", "medsam"] = "sam"):
-        super().__init__()
-        from medAI.modeling.sam import build_medsam, build_sam
-        from medAI.modeling.unetr import UNETR
-
-        _sam_model = build_sam() if backbone == "sam" else build_medsam()
-        self.model = UNETR(
-            _sam_model.image_encoder,
-            input_size=1024,
-            output_size=256,
+        cnn_parameters = (
+            self.patch_feature_cnn.parameters()
+            if self.patch_feature_cnn is not None
+            else []
         )
 
-    def forward(
-        self,
-        image=None,
-        task_id=None,
-        anatomical_location=None,
-        psa=None,
-        age=None,
-        family_history=None,
-        prostate_mask=None,
-        needle_mask=None,
-    ):
-        return self.model(image)
+        return encoder_parameters, warmup_parameters, cnn_parameters
 
-    def get_encoder_parameters(self):
-        return self.model.image_encoder.parameters()
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument(
+            "--backbone",
+            type=str,
+            choices=("sam", "medsam", "sam_med2d"),
+            default="medsam",
+        )
+        parser.add_argument(
+            "--prompts",
+            type=str,
+            nargs="+",
+            default=["task", "anatomical", "psa", "age", "family_history"],
+            help="The prompts to use for the model.",
+            choices=cls.PROMPT_OPTIONS,
+        )
+        parser.add_argument(
+            "--prompt_dropout",
+            type=float,
+            default=0.0,
+            help="The dropout to use for the prompts.",
+        )
+        parser.add_argument(
+            "--cnn_mode",
+            choices=("dense_prompt", "sparse_prompt", "disabled"),
+            type=lambda x: None if x == "disabled" else str(x),
+            help="Mode to use for the CNN branch.",
+            default="disabled",
+        )
+        parser.add_argument(
+            "--replace_patch_embed",
+            action="store_true",
+            help="If True, replaces the patch embedding with a learned convolutional patch embedding.",
+        )
+        parser.add_argument(
+            "--sparse_cnn_backbone_path",
+            type=str,
+            default=None,
+            help="The path to the sparse CNN backbone to use. If None, randomly initializes and trains the backbone.",
+        )
 
-    def get_non_encoder_parameters(self):
-        return [p for k, p in self.model.named_parameters() if "image_encoder" not in k]
+    @staticmethod
+    def from_args(args):
+        print(
+            f"""Building model with args: 
+              {args.backbone=}
+              {args.prompts=}
+              {args.prompt_dropout=}
+              {args.sparse_cnn_backbone_path=}
+              {args.replace_patch_embed=}
+            """
+        )
+
+        return ProFound(
+            sam_backbone=args.backbone,
+            prompts=args.prompts,
+            prompt_dropout=args.prompt_dropout,
+            sparse_cnn_backbone_path=args.sparse_cnn_backbone_path,
+            replace_patch_embed=args.replace_patch_embed,
+        )
 
 
 class BinaryGeneralizedCrossEntropy(torch.nn.Module):
@@ -1512,5 +1402,6 @@ def build_sam_unetr():
 if __name__ == "__main__":
     from simple_parsing import ArgumentParser
 
-    experiment = Experiment(ARGS)
+    args = parse_args()
+    experiment = Experiment(args)
     experiment.run()
