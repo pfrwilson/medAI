@@ -5,18 +5,18 @@ import typing as tp
 import numpy as np
 import torch
 import torch.nn as nn
+import wandb
 from einops import rearrange, repeat
 from matplotlib import pyplot as plt
+from src.data_factory import BModeDataFactoryV1
+from torch.nn import functional as F
+from tqdm import tqdm
+
 from medAI.utils.reproducibiliy import (
     get_all_rng_states,
     set_all_rng_states,
     set_global_seed,
 )
-from torch.nn import functional as F
-from tqdm import tqdm
-
-import wandb
-from src.data_factory import BModeDataFactoryV1
 
 
 def parse_args():
@@ -1029,7 +1029,7 @@ class ProFound(nn.Module):
         EMBEDDING_DIM = 256
 
         # null prompt - used for prompt dropout
-        self.null_prompt = nn.Parameter(torch.zeros(0, 0, EMBEDDING_DIM))
+        self.null_prompt = nn.Parameter(torch.zeros(1, EMBEDDING_DIM))
 
         # used for multitask training, but not currently used
         self.task_prompt_module = nn.Embedding(n_tasks, EMBEDDING_DIM)
@@ -1235,6 +1235,13 @@ class ProFound(nn.Module):
                 patch_cnn_sparse_embeddings[i, : len(e)] = e
                 patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
 
+            if self.prompt_dropout > 0 and self.training:
+                for i in range(patch_cnn_sparse_embeddings.shape[1]):
+                    if torch.rand(1) < self.prompt_dropout:
+                        patch_cnn_sparse_embeddings[:, i, :] = self.null_prompt.repeat(
+                            B, 1, 1
+                        )
+
             sparse_embedding = torch.cat(
                 [sparse_embedding, patch_cnn_sparse_embeddings], dim=1
             )
@@ -1270,9 +1277,7 @@ class ProFound(nn.Module):
             self.anatomical_prompt_module.parameters(),
             self.psa_prompt_module.parameters(),
             self.age_prompt_module.parameters(),
-            [self.age_null_prompt],
-            [self.psa_null_prompt],
-            [self.anatomical_null_prompt],
+            [self.null_prompt],
             self.family_history_prompt_module.parameters(),
             self.patch_feature_prompt_module.parameters(),
             self.medsam_model.image_encoder.neck.parameters(),
