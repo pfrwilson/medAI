@@ -1,15 +1,27 @@
 """
 Implements wrappers and registry for Segment Anything Model (SAM) models.
 """
-from segment_anything import sam_model_registry
 import os
-from torch import nn 
-import torch 
-from segment_anything.modeling.common import MLPBlock
-from segment_anything.modeling.image_encoder import ImageEncoderViT, Attention, Block
 
+import torch
+from torch import nn
+
+from ..vendor.MedSAM.segment_anything.modeling.common import MLPBlock
+from ..vendor.MedSAM.segment_anything.modeling.image_encoder import (
+    Attention,
+    Block,
+    ImageEncoderViT,
+)
+from .segment_anything.build_sam import sam_model_registry
 
 CHECKPOINT_DIR = os.environ["CHECKPOINT_DIR"] # top level checkpoint directory
+
+
+def build_sam(): 
+    """Builds the sam-vit-b model."""
+    checkpoint = os.path.join(CHECKPOINT_DIR, "sam_vit_b_01ec64.pth")
+    model = sam_model_registry["vit_b"](checkpoint=checkpoint)
+    return model
 
 
 def build_medsam(): 
@@ -23,7 +35,24 @@ def build_medsam():
     return model
 
 
-class MedSAMForFinetuning(nn.Module):
+def build_sammed_2d():
+    from argparse import Namespace
+
+    import torch
+
+    from ..vendor.SAM_Med2D.segment_anything import (
+        sam_model_registry as sammed_model_registry,
+    )
+    args = Namespace()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args.image_size = 256
+    args.encoder_adapter = True
+    args.sam_checkpoint = "/ssd005/projects/exactvu_pca/checkpoint_store/sam-med2d_b.pth"
+    model = sammed_model_registry["vit_b"](args).to(device)
+    return model
+
+
+class SAMForUnpromptedSegmentation(nn.Module):
     """
     Wraps the SAM model to do unprompted segmentation.     
 
@@ -31,26 +60,21 @@ class MedSAMForFinetuning(nn.Module):
         freeze_backbone (bool): If True, freezes the backbone of the model.
     """
     def __init__(
-        self, freeze_backbone=True
+        self, sam_model
     ):
         super().__init__()
         from segment_anything import sam_model_registry
 
-        self.medsam_model = build_medsam()
-        if freeze_backbone:
-            for param in self.medsam_model.image_encoder.parameters():
-                param.requires_grad = False
-            for param in self.medsam_model.prompt_encoder.parameters():
-                param.requires_grad = False
+        self.sam_model = sam_model
 
     def forward(self, image):
-        image_feats = self.medsam_model.image_encoder(image)
-        sparse_embedding, dense_embedding = self.medsam_model.prompt_encoder(
+        image_feats = self.sam_model.image_encoder(image)
+        sparse_embedding, dense_embedding = self.sam_model.prompt_encoder(
             None, None, None  # no prompt - find prostate
         )
-        mask_logits = self.medsam_model.mask_decoder.forward(
+        mask_logits = self.sam_model.mask_decoder.forward(
             image_feats,
-            self.medsam_model.prompt_encoder.get_dense_pe(),
+            self.sam_model.prompt_encoder.get_dense_pe(),
             sparse_embedding,
             dense_embedding,
             multimask_output=False,
