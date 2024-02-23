@@ -4,7 +4,6 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
 import wandb
 
 
@@ -92,6 +91,16 @@ def calculate_metrics(predictions, labels, log_images=False):
         plt.title(f"Core AUC: {metrics['core_auc']:.3f}")
         metrics["histogram"] = wandb.Image(
                     plt, caption="Histogram of core predictions"
+        )
+        plt.close()
+
+        plt.figure()
+        plt.plot(fpr, tpr)
+        plt.xlabel("False positive rate")
+        plt.ylabel("True positive rate")
+        plt.title("ROC curve")
+        metrics["roc_curve"] = wandb.Image(
+                    plt, caption="ROC curve"
         )
         plt.close()
 
