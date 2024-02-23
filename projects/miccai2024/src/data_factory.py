@@ -74,15 +74,21 @@ class DataFactory(ABC):
 
 class TransformV1:
     def __init__(
-        self, augment="translate", image_size=1024, dataset_name="nct", labeled=True
+        self,
+        augment="translate",
+        image_size=1024,
+        mask_size=256,
+        dataset_name="nct",
+        labeled=True,
     ):
         self.augment = augment
         self.image_size = image_size
         self.dataset_name = dataset_name
         self.labeled = labeled
+        self.mask_size = mask_size
 
     def __call__(self, item):
-        out = {}
+        out = item.copy()
         bmode = item["bmode"]
         bmode = torch.from_numpy(bmode.copy()).float()
         bmode = bmode.unsqueeze(0)
@@ -128,6 +134,37 @@ class TransformV1:
             bmode, needle_mask, prostate_mask = T.RandomResizedCrop(
                 size=(self.image_size, self.image_size), scale=(0.8, 1.0)
             )(bmode, needle_mask, prostate_mask)
+        elif self.augment == "crop_random_gamma":
+            random_gamma = (0.5, 1.5)
+            crop_scale_1 = (0.8, 1.0)
+            if np.random.rand() < 0.5:
+                from torchvision.transforms.functional import adjust_gamma
+
+                gamma = np.random.uniform(*random_gamma)
+                bmode = adjust_gamma(bmode, gamma, gain=gamma)
+
+            if crop_scale_1 is not None:
+                from torchvision.transforms.v2 import RandomResizedCrop
+
+                crop1 = RandomResizedCrop((1024, 1024), scale=crop_scale_1)
+                bmode, needle_mask, prostate_mask = crop1(
+                    bmode, needle_mask, prostate_mask
+                )
+        elif self.augment == "strong_crop":
+            crop = T.RandomResizedCrop((1024, 1024), scale=(0.5, 1.0), antialias=True)
+            bmode, needle_mask, prostate_mask = crop(bmode, needle_mask, prostate_mask)
+
+        # interpolate the masks to the mask size
+        needle_mask = T.Resize(
+            (self.mask_size, self.mask_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(needle_mask)
+        prostate_mask = T.Resize(
+            (self.mask_size, self.mask_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(prostate_mask)
 
         out["bmode"] = bmode
         out["needle_mask"] = needle_mask
@@ -163,6 +200,10 @@ class TransformV1:
         out["loc"] = torch.tensor(CORE_LOCATION_TO_IDX[loc]).long()
         out["all_cores_benign"] = torch.tensor(item["all_cores_benign"]).bool()
         out["dataset_name"] = self.dataset_name
+        out["primary_grade"] = item["primary_grade"]
+        out["secondary_grade"] = item["secondary_grade"]
+        out["grade"] = item["grade"]
+        out["core_id"] = item["core_id"]
 
         return out
 
@@ -178,8 +219,10 @@ class BModeDataFactoryV1(DataFactory):
         remove_benign_cores_from_positive_patients: bool = True,
         batch_size: int = 1,
         image_size: int = 1024,
+        mask_size: int = 256,
         augmentations: str = "none",
         labeled: bool = True,
+        val_seed: int = 0,
     ):
         from medAI.datasets.nct2013.bmode_dataset import BModeDatasetV1
         from medAI.datasets.nct2013.cohort_selection import select_cohort
@@ -192,13 +235,17 @@ class BModeDataFactoryV1(DataFactory):
             involvement_threshold_pct=min_involvement_train,
             exclude_benign_cores_from_positive_patients=remove_benign_cores_from_positive_patients,
             splits_file="/ssd005/projects/exactvu_pca/nct2013/patient_splits.csv",
+            val_seed=val_seed,
         )
 
         self.train_transform = TransformV1(
-            augment=augmentations, image_size=image_size, labeled=labeled
+            augment=augmentations,
+            image_size=image_size,
+            labeled=labeled,
+            mask_size=mask_size,
         )
         self.val_transform = TransformV1(
-            augment="none", image_size=image_size, labeled=labeled
+            augment="none", image_size=image_size, labeled=labeled, mask_size=mask_size
         )
 
         self.train_dataset = BModeDatasetV1(train_cores, self.train_transform)
@@ -233,6 +280,42 @@ class BModeDataFactoryV1(DataFactory):
             shuffle=False,
             num_workers=8,
             pin_memory=True,
+        )
+
+    @staticmethod
+    def add_args(parser):
+        # fmt: off
+        group = parser.add_argument_group("Data")
+        group.add_argument("--fold", type=int, default=None, help="The fold to use. If not specified, uses leave-one-center-out cross-validation.")
+        group.add_argument("--n_folds", type=int, default=None, help="The number of folds to use for cross-validation.")
+        group.add_argument("--test_center", type=str, default=None, 
+                            help="If not None, uses leave-one-center-out cross-validation with the specified center as test. If None, uses k-fold cross-validation.")
+        group.add_argument("--val_seed", type=int, default=0, 
+                        help="The seed to use for validation split.")            
+        group.add_argument("--undersample_benign_ratio", type=lambda x: float(x) if not x.lower() == 'none' else None, default=None,
+                        help="""If not None, undersamples benign cores with the specified ratio.""")
+        group.add_argument("--min_involvement_train", type=float, default=0.0,
+                        help="""The minimum involvement threshold to use for training.""")
+        group.add_argument("--batch_size", type=int, default=1, help="The batch size to use for training.")
+        group.add_argument("--augmentations", type=str, default="translate", help="The augmentations to use for training.")
+        group.add_argument("--remove_benign_cores_from_positive_patients", action="store_true", help="If True, removes benign cores from positive patients (training only).")
+        group.add_argument("--image_size", type=int, default=1024, help="The size to use for the images.")
+        group.add_argument("--mask_size", type=int, default=256, help="The size to use for the masks.")
+        # fmt: on
+
+    @classmethod
+    def from_args(cls, args, **kwargs):
+        return cls(
+            fold=args.fold,
+            n_folds=args.n_folds,
+            test_center=args.test_center,
+            undersample_benign_ratio=args.undersample_benign_ratio,
+            min_involvement_train=args.min_involvement_train,
+            remove_benign_cores_from_positive_patients=args.remove_benign_cores_from_positive_patients,
+            batch_size=args.batch_size,
+            image_size=args.image_size,
+            augmentations=args.augmentations,
+            **kwargs,
         )
 
 
