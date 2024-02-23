@@ -1,9 +1,11 @@
-from sklearn.model_selection import StratifiedKFold, train_test_split
-import os
-import pandas as pd
-from .data_access import data_accessor
-from abc import ABC, abstractmethod
 import logging
+import os
+from abc import ABC, abstractmethod
+
+import pandas as pd
+from sklearn.model_selection import StratifiedKFold, train_test_split
+
+from .data_access import data_accessor
 
 
 def get_patient_splits_by_fold(fold=0, n_folds=5, splits_file=None):
@@ -48,7 +50,7 @@ def get_patient_splits_by_fold(fold=0, n_folds=5, splits_file=None):
     return train, val, test
 
 
-def get_patient_splits_by_center(leave_out="UVA"):
+def get_patient_splits_by_center(leave_out="UVA", val_size=0.2, val_seed=0):
     """returns the list of patient ids for the train, val, and test splits."""
     if leave_out not in ["UVA", "CRCEO", "PCC", "PMCC", "JH"]:
         raise ValueError(
@@ -61,7 +63,7 @@ def get_patient_splits_by_center(leave_out="UVA"):
 
     train = table[table.center != leave_out]
     train, val = train_test_split(
-        train, test_size=0.2, random_state=0, stratify=train["center"]
+        train, test_size=val_size, random_state=val_seed, stratify=train["center"]
     )
     train = train.patient_id.values.tolist()
     val = val.patient_id.values.tolist()
@@ -152,6 +154,8 @@ def select_cohort(
     undersample_benign_ratio=None,
     seed=0,
     splits_file=None, 
+    val_seed=0, 
+    val_size=0.2, 
 ):
     """Returns the list of core ids for the given cohort selection criteria.
     
@@ -174,7 +178,7 @@ def select_cohort(
 
     if test_center is not None:
         logging.info(f"Using test center {test_center}")
-        train, val, test = get_patient_splits_by_center(leave_out=test_center)
+        train, val, test = get_patient_splits_by_center(leave_out=test_center, val_size=val_size, val_seed=val_seed)
     elif fold is not None: 
         assert n_folds is not None, "Must specify n_folds if fold is specified."
         train, val, test = get_patient_splits_by_fold(fold=fold, n_folds=n_folds, splits_file=splits_file)
