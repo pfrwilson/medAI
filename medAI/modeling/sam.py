@@ -1,36 +1,39 @@
 """
 Implements wrappers and registry for Segment Anything Model (SAM) models.
 """
+
 import os
 
 import torch
 from torch import nn
 
-from ..vendor.MedSAM.segment_anything.modeling.common import MLPBlock
-from ..vendor.MedSAM.segment_anything.modeling.image_encoder import (
+from .medsam.segment_anything.modeling.image_encoder import (
     Attention,
     Block,
     ImageEncoderViT,
+    MLPBlock,
 )
 from .segment_anything.build_sam import sam_model_registry
 
-CHECKPOINT_DIR = os.environ["CHECKPOINT_DIR"] # top level checkpoint directory
+CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR")  # top level checkpoint directory
+if CHECKPOINT_DIR is None:
+    raise ValueError(
+        "Environment variable CHECKPOINT_DIR must be set to the top level checkpoint directory"
+    )
 
 
-def build_sam(): 
+def build_sam():
     """Builds the sam-vit-b model."""
     checkpoint = os.path.join(CHECKPOINT_DIR, "sam_vit_b_01ec64.pth")
     model = sam_model_registry["vit_b"](checkpoint=checkpoint)
     return model
 
 
-def build_medsam(): 
+def build_medsam():
     """
     Builds the MedSAM model by building the SAM model and loading the medsam checkpoint.
     """
-    checkpoint = os.path.join(
-        CHECKPOINT_DIR, "medsam_vit_b_cpu.pth"
-    )
+    checkpoint = os.path.join(CHECKPOINT_DIR, "medsam_vit_b_cpu.pth")
     model = sam_model_registry["vit_b"](checkpoint=checkpoint)
     return model
 
@@ -40,28 +43,26 @@ def build_sammed_2d():
 
     import torch
 
-    from ..vendor.SAM_Med2D.segment_anything import (
-        sam_model_registry as sammed_model_registry,
-    )
+    from .sam_med2d.segment_anything import sam_model_registry as sammed_model_registry
+
     args = Namespace()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.image_size = 256
     args.encoder_adapter = True
-    args.sam_checkpoint = "/ssd005/projects/exactvu_pca/checkpoint_store/sam-med2d_b.pth"
+    args.sam_checkpoint = os.path.join(CHECKPOINT_DIR, "sam-med2d_b.pth")
     model = sammed_model_registry["vit_b"](args).to(device)
     return model
 
 
 class SAMForUnpromptedSegmentation(nn.Module):
     """
-    Wraps the SAM model to do unprompted segmentation.     
+    Wraps the SAM model to do unprompted segmentation.
 
     Args:
         freeze_backbone (bool): If True, freezes the backbone of the model.
     """
-    def __init__(
-        self, sam_model
-    ):
+
+    def __init__(self, sam_model):
         super().__init__()
         from segment_anything import sam_model_registry
 
@@ -84,8 +85,8 @@ class SAMForUnpromptedSegmentation(nn.Module):
     def get_loss_and_score(self, mask_logits, gt_mask):
         """Computes the loss and performance score for the given mask logits and ground truth mask.
 
-        Loss is the sum of dice and cross-entropy loss 
-        
+        Loss is the sum of dice and cross-entropy loss
+
         Args:
             mask_logits (torch.Tensor): The mask logits of shape (B, C, H, W).
             gt_mask (torch.Tensor): The ground truth mask of shape (B, C, H, W).
@@ -126,9 +127,9 @@ class Adapter(nn.Module):
     def forward(self, x):
         return self.up_project(self.act(self.down_project(x))) + x
 
-    
-class AdapterAttn(nn.Module): 
-    def __init__(self, attn:Attention, adapter_dim: int, init_scale: float = 1e-3): 
+
+class AdapterAttn(nn.Module):
+    def __init__(self, attn: Attention, adapter_dim: int, init_scale: float = 1e-3):
         super().__init__()
         self.attn = attn
         embedding_dim = attn.proj.in_features
@@ -139,10 +140,10 @@ class AdapterAttn(nn.Module):
         x = self.attn(x)
         x = self.adapter(x)
         return x
-    
 
-class AdapterMLPBlock(nn.Module): 
-    def __init__(self, mlp:MLPBlock, adapter_dim: int, init_scale: float = 1e-3): 
+
+class AdapterMLPBlock(nn.Module):
+    def __init__(self, mlp: MLPBlock, adapter_dim: int, init_scale: float = 1e-3):
         super().__init__()
 
         self.mlp = mlp
@@ -156,27 +157,28 @@ class AdapterMLPBlock(nn.Module):
         return x
 
 
-def wrap_block_with_adapter(block: Block, adapter_dim: int, init_scale: float = 1e-3): 
+def wrap_block_with_adapter(block: Block, adapter_dim: int, init_scale: float = 1e-3):
     block.attn = AdapterAttn(block.attn, adapter_dim, init_scale=init_scale)
     block.mlp = AdapterMLPBlock(block.mlp, adapter_dim, init_scale=init_scale)
     return block
 
 
-def wrap_image_encoder_with_adapter(image_encoder: ImageEncoderViT, adapter_dim: int, init_scale: float = 1e-3): 
+def wrap_image_encoder_with_adapter(
+    image_encoder: ImageEncoderViT, adapter_dim: int, init_scale: float = 1e-3
+):
     new_blocks = torch.nn.ModuleList()
-    for block in image_encoder.blocks: 
+    for block in image_encoder.blocks:
         new_block = wrap_block_with_adapter(block, adapter_dim, init_scale=init_scale)
         new_blocks.append(new_block)
 
     image_encoder.blocks = new_blocks
-    
+
     return image_encoder
 
 
-def freeze_non_adapter_layers(model: nn.Module): 
-    for name, param in model.named_parameters(): 
-        if 'adapter' not in name: 
+def freeze_non_adapter_layers(model: nn.Module):
+    for name, param in model.named_parameters():
+        if "adapter" not in name:
             param.requires_grad = False
 
     return model
-
