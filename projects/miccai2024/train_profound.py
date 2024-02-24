@@ -1,6 +1,8 @@
+import argparse
 import logging
 import os
 import typing as tp
+from argparse import ArgumentParser
 
 import numpy as np
 import torch
@@ -21,10 +23,9 @@ from medAI.utils.reproducibiliy import (
 
 def parse_args():
     # fmt: off
-    import argparse
 
     from rich_argparse import ArgumentDefaultsRichHelpFormatter
-    parser = argparse.ArgumentParser(add_help=False, formatter_class=ArgumentDefaultsRichHelpFormatter)
+    parser = ArgumentParser(add_help=False, formatter_class=ArgumentDefaultsRichHelpFormatter)
 
     group = parser.add_argument_group("Data", "Arguments related to data loading and preprocessing")
     group.add_argument("--fold", type=int, default=None, help="The fold to use. If not specified, uses leave-one-center-out cross-validation.")
@@ -42,11 +43,12 @@ def parse_args():
     group.add_argument("--remove_benign_cores_from_positive_patients", action="store_true", help="If True, removes benign cores from positive patients (training only).")
     group.add_argument("--image_size", type=int, default=1024, help="The size to use for the images.")
     group.add_argument("--mask_size", type=int, default=256, help="The size to use for the masks.")
-
+    group.add_argument("--limit_train_data", type=float, default=None, 
+                       help="""If not None, chooses a center-balanced subset of the original train data to train with. The value given is the fraction of the original data to use.""")
     group = parser.add_argument_group("Training", "Arguments related to training.")
     group.add_argument("--optimizer", type=str, default="adamw", help="The optimizer to use for training.")
-    group.add_argument("--lr", type=float, default=1e-5, help="LR for the model.")
-    group.add_argument("--encoder_lr", type=float, default=1e-5, help="LR for the encoder part of the model.")
+    group.add_argument("--lr", type=float, default=1e-5, help="LR for the model the mask decoder and prompt encoder portions of the model during Stage 2.")
+    group.add_argument("--encoder_lr", type=float, default=1e-5, help="LR for the encoder part of the model during Stage 2.")
     group.add_argument("--warmup_lr", type=float, default=1e-4, help="LR for the warmup, frozen encoder part.")
     group.add_argument("--cnn_lr", type=float, default=1e-5, help="LR for the CNN part of the model.")
     group.add_argument("--warmup_epochs", type=int, default=5, help="The number of epochs to train the warmup, frozen encoder part.")
@@ -57,8 +59,7 @@ def parse_args():
     group.add_argument("--accumulate_grad_steps", type=int, default=8, help="The number of gradient accumulation steps to use.")
 
     # MODEL
-    group = parser.add_argument_group("Model", "Arguments related to the model.")
-    ProFound.add_arguments(group)
+    ProFound.add_arguments(parser)
 
     # LOSS
     parser.add_argument("--n_loss_terms", type=int, default=1, help="""The number of loss terms to use.
@@ -176,6 +177,14 @@ class Experiment:
         self.model.to(self.config.device)
         torch.compile(self.model)
 
+        logging.info("Model setup complete")
+        logging.info(
+            f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}"
+        )
+        logging.info(
+            f"Number of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"
+        )
+
         # setup criterion
         loss_terms = []
         loss_weights = []
@@ -286,6 +295,7 @@ class Experiment:
             augmentations=self.config.augmentations,
             remove_benign_cores_from_positive_patients=self.config.remove_benign_cores_from_positive_patients,
             val_seed=self.config.val_seed,
+            limit_train_data=self.config.limit_train_data,
         )
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
@@ -963,6 +973,14 @@ class ProFound(nn.Module):
         "family_history",
         "prostate_mask",
         "sparse_cnn_patch_features",
+        "data_independent_prompts",
+    ]
+
+    BACKBONE_OPTIONS = [
+        "sam",
+        "medsam",
+        "sam_med2d",
+        "adapter_medsam",
     ]
 
     def __init__(
@@ -970,10 +988,14 @@ class ProFound(nn.Module):
         n_tasks=1,
         prompts: list[str] = [],
         prompt_dropout: float = 0.0,  # dropout for prompt embeddings
-        sam_backbone: tp.Literal["sam", "medsam", "sam_med2d"] = "medsam",
-        warmup_patch_embed: bool = None,
+        sam_backbone: tp.Literal[
+            "sam", "medsam", "sam_med2d", "adapter_medsam"
+        ] = "medsam",
         replace_patch_embed: bool = False,
         sparse_cnn_backbone_path: str = None,
+        freeze_mask_decoder: bool = False,
+        freeze_image_encoder: bool = False,
+        freeze_cnn: bool = False,
     ):
         super().__init__()
         self.prompts = prompts
@@ -987,7 +1009,12 @@ class ProFound(nn.Module):
                     f"Unknown prompt option: {p}. Options are {self.PROMPT_OPTIONS}"
                 )
 
-        from medAI.modeling.sam import build_medsam, build_sam, build_sammed_2d
+        from medAI.modeling.sam import (
+            build_adapter_medsam_256,
+            build_medsam,
+            build_sam,
+            build_sammed_2d,
+        )
 
         # BUILD BACKBONE
         if sam_backbone == "medsam":
@@ -1024,6 +1051,19 @@ class ProFound(nn.Module):
             else:
                 # use the default patch embed which is designed for 256x256 images
                 self.image_size_for_features = 256
+        elif sam_backbone == "adapter_medsam":
+            self.medsam_model = build_adapter_medsam_256()
+            self.image_size_for_features = 1024
+
+        if freeze_image_encoder:
+            logging.debug("Freezing image encoder")
+            for param in self.medsam_model.image_encoder.parameters():
+                param.requires_grad = False
+
+        if freeze_mask_decoder:
+            logging.debug("Freezing mask decoder")
+            for param in self.medsam_model.mask_decoder.parameters():
+                param.requires_grad = False
 
         # BUILD PROMPT MODULES
         EMBEDDING_DIM = 256
@@ -1072,12 +1112,18 @@ class ProFound(nn.Module):
                 }
             )
         self.patch_feature_cnn = model
+        if freeze_cnn:
+            for param in self.patch_feature_cnn.parameters():
+                param.requires_grad = False
 
         # project the CNN features to the prompt space
         self.patch_feature_prompt_module = nn.Linear(512, EMBEDDING_DIM)
         self.pad_token = nn.Parameter(
             torch.zeros(EMBEDDING_DIM)
         )  # for padding the number of patches to a fixed number in a minibatch
+
+        # data independent prompts
+        self.data_independent_prompts = nn.Parameter(torch.randn(1, 10, EMBEDDING_DIM))
 
     def forward(
         self,
@@ -1187,6 +1233,15 @@ class ProFound(nn.Module):
                 [sparse_embedding, family_history_embedding], dim=1
             )
 
+        if "data_independent_prompts" in self.prompts:
+            sparse_embedding = torch.cat(
+                [
+                    sparse_embedding,
+                    self.data_independent_prompts.repeat_interleave(B, 0),
+                ],
+                dim=1,
+            )
+
         if "sparse_cnn_patch_features" in self.prompts:
             # we need to extract patches from the images.
             patches = []
@@ -1238,9 +1293,9 @@ class ProFound(nn.Module):
             if self.prompt_dropout > 0 and self.training:
                 for i in range(patch_cnn_sparse_embeddings.shape[1]):
                     if torch.rand(1) < self.prompt_dropout:
-                        patch_cnn_sparse_embeddings[:, i, :] = self.null_prompt.repeat(
-                            B, 1, 1
-                        )
+                        patch_cnn_sparse_embeddings[
+                            :, i, :
+                        ] = self.null_prompt.repeat_interleave(B, 0)
 
             sparse_embedding = torch.cat(
                 [sparse_embedding, patch_cnn_sparse_embeddings], dim=1
@@ -1278,6 +1333,7 @@ class ProFound(nn.Module):
             self.psa_prompt_module.parameters(),
             self.age_prompt_module.parameters(),
             [self.null_prompt],
+            [self.data_independent_prompts],
             self.family_history_prompt_module.parameters(),
             self.patch_feature_prompt_module.parameters(),
             self.medsam_model.image_encoder.neck.parameters(),
@@ -1293,56 +1349,77 @@ class ProFound(nn.Module):
         return encoder_parameters, warmup_parameters, cnn_parameters
 
     @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument(
+    def add_arguments(cls, parser: ArgumentParser):
+        group = parser.add_argument_group("Model")
+        group.add_argument(
             "--backbone",
             type=str,
-            choices=("sam", "medsam", "sam_med2d"),
+            choices=cls.BACKBONE_OPTIONS,
             default="medsam",
+            help="The backbone to use for the model.",
         )
-        parser.add_argument(
+        group.add_argument(
             "--prompts",
             type=str,
             nargs="+",
             default=["task", "anatomical", "psa", "age", "family_history"],
             help="The prompts to use for the model.",
-            choices=cls.PROMPT_OPTIONS,
+            choices=cls.PROMPT_OPTIONS + ["none"],
         )
-        parser.add_argument(
+        group.add_argument(
             "--prompt_dropout",
             type=float,
             default=0.0,
             help="The dropout to use for the prompts.",
         )
-        parser.add_argument(
+        group.add_argument(
             "--cnn_mode",
             choices=("dense_prompt", "sparse_prompt", "disabled"),
             type=lambda x: None if x == "disabled" else str(x),
             help="Mode to use for the CNN branch.",
             default="disabled",
         )
-        parser.add_argument(
+        group.add_argument(
             "--replace_patch_embed",
             action="store_true",
             help="If True, replaces the patch embedding with a learned convolutional patch embedding.",
         )
-        parser.add_argument(
+        group.add_argument(
             "--sparse_cnn_backbone_path",
             type=str,
             default=None,
             help="The path to the sparse CNN backbone to use. If None, randomly initializes and trains the backbone.",
         )
+        group.add_argument(
+            "--freeze_mask_decoder",
+            action="store_true",
+            help="If True, freezes the mask decoder.",
+        )
+        group.add_argument(
+            "--freeze_image_encoder",
+            action="store_true",
+            help="If True, freezes the image encoder. This is useful for partial finetuning or prompt tuning",
+        )
+        group.add_argument(
+            "--freeze_cnn",
+            action="store_true",
+            help="If True, freezes the CNN.",
+        )
+        return group
 
     @staticmethod
     def from_args(args):
+        if "none" in args.prompts:
+            args.prompts = []
+
         print(
             f"""Building model with args: 
-              {args.backbone=}
-              {args.prompts=}
-              {args.prompt_dropout=}
-              {args.sparse_cnn_backbone_path=}
-              {args.replace_patch_embed=}
-            """
+    {args.backbone=}
+    {args.prompts=}
+    {args.prompt_dropout=}
+    {args.sparse_cnn_backbone_path=}
+    {args.replace_patch_embed=}
+"""
         )
 
         return ProFound(
@@ -1351,6 +1428,9 @@ class ProFound(nn.Module):
             prompt_dropout=args.prompt_dropout,
             sparse_cnn_backbone_path=args.sparse_cnn_backbone_path,
             replace_patch_embed=args.replace_patch_embed,
+            freeze_mask_decoder=args.freeze_mask_decoder,
+            freeze_image_encoder=args.freeze_image_encoder,
+            freeze_cnn=args.freeze_cnn,
         )
 
 

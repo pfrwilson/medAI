@@ -3,11 +3,12 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from medAI.datasets.nct2013.data_access import data_accessor
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as T
 from torchvision.transforms.functional import InterpolationMode
 from torchvision.tv_tensors import Image, Mask
+
+from medAI.datasets.nct2013.data_access import data_accessor
 
 table = data_accessor.get_metadata_table()
 psa_min = table["psa"].min()
@@ -222,6 +223,7 @@ class BModeDataFactoryV1(DataFactory):
         mask_size: int = 256,
         augmentations: str = "none",
         labeled: bool = True,
+        limit_train_data: float | None = None,
         val_seed: int = 0,
     ):
         from medAI.datasets.nct2013.bmode_dataset import BModeDatasetV1
@@ -237,6 +239,17 @@ class BModeDataFactoryV1(DataFactory):
             splits_file="/ssd005/projects/exactvu_pca/nct2013/patient_splits.csv",
             val_seed=val_seed,
         )
+
+        if limit_train_data is not None:
+            cores = train_cores
+            center = [core.split("-")[0] for core in cores]
+            from sklearn.model_selection import StratifiedShuffleSplit
+
+            sss = StratifiedShuffleSplit(
+                n_splits=1, test_size=1 - limit_train_data, random_state=0
+            )
+            for train_index, _ in sss.split(cores, center):
+                train_cores = [cores[i] for i in train_index]
 
         self.train_transform = TransformV1(
             augment=augmentations,
@@ -466,14 +479,15 @@ def dataloaders(
     train_dataset_names: list[str] = ["nct", "aligned_files"],
     test_dataset_names: list[str] = ["nct", "aligned_files"],
 ):
+    from torchvision.transforms import InterpolationMode
+    from torchvision.transforms import v2 as T
+    from torchvision.tv_tensors import Image, Mask
+
     from medAI.datasets import (
         AlignedFilesDataset,
         CohortSelectionOptions,
         ExactNCT2013BmodeImagesWithManualProstateSegmentation,
     )
-    from torchvision.transforms import InterpolationMode
-    from torchvision.transforms import v2 as T
-    from torchvision.tv_tensors import Image, Mask
 
     class AlignedFilesTransform:
         """Transforms for the aligned files dataset"""
