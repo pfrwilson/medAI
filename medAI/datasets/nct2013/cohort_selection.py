@@ -15,9 +15,7 @@ def get_patient_splits_by_fold(fold=0, n_folds=5, splits_file=None):
         # we manually override the this function and use the csv file
         # because the original code uses a random seed to split the data
         # and we want to be able to reproduce the splits
-        table = pd.read_csv(
-            splits_file
-        )
+        table = pd.read_csv(splits_file)
         train_ids = table[table[f"fold_{fold}"] == "train"].patient_id.values.tolist()
         val_ids = table[table[f"fold_{fold}"] == "val"].patient_id.values.tolist()
         test_ids = table[table[f"fold_{fold}"] == "test"].patient_id.values.tolist()
@@ -120,7 +118,7 @@ def undersample_benign(cores, seed=0, benign_to_cancer_ratio=1):
 
 
 def apply_core_filters(
-    core_ids, 
+    core_ids,
     exclude_benign_cores_from_positive_patients=False,
     involvement_threshold_pct=None,
     undersample_benign_ratio=None,
@@ -143,8 +141,8 @@ def apply_core_filters(
         )
 
     return core_ids
-        
-    
+
+
 def select_cohort(
     fold=None,
     n_folds=None,
@@ -153,24 +151,24 @@ def select_cohort(
     involvement_threshold_pct=None,
     undersample_benign_ratio=None,
     seed=0,
-    splits_file=None, 
-    val_seed=0, 
-    val_size=0.2, 
+    splits_file=None,
+    val_seed=0,
+    val_size=0.2,
 ):
     """Returns the list of core ids for the given cohort selection criteria.
-    
+
     Default is to use the 5-fold split.
 
-    Args: 
+    Args:
         fold (int): If specified, the fold to use for the train/val/test split.
         n_folds (int): If specified, the number of folds to use for the train/val/test split.
         test_center (str): If specified, the center to use for the test set.
 
-        The following arguments are used to filter the cores in the cohort, affecting 
+        The following arguments are used to filter the cores in the cohort, affecting
             only the train sets:
         remove_benign_cores_from_positive_patients (bool): If True, remove cores from patients with malignant cores that also have benign cores.
         involvement_threshold_pct (float): If specified, remove cores with less than the given percentage of cancer cells.
-            this should be a value between 0 and 100. 
+            this should be a value between 0 and 100.
         undersample_benign_ratio (float): If specified, undersample the benign cores to the given ratio.
         seed (int): Random seed to use for the undersampling.
         splits_file: if specified, use the given csv file to load the train/val/test splits (kfold only)
@@ -178,20 +176,26 @@ def select_cohort(
 
     if test_center is not None:
         logging.info(f"Using test center {test_center}")
-        train, val, test = get_patient_splits_by_center(leave_out=test_center, val_size=val_size, val_seed=val_seed)
-    elif fold is not None: 
+        train, val, test = get_patient_splits_by_center(
+            leave_out=test_center, val_size=val_size, val_seed=val_seed
+        )
+    elif fold is not None:
         assert n_folds is not None, "Must specify n_folds if fold is specified."
-        train, val, test = get_patient_splits_by_fold(fold=fold, n_folds=n_folds, splits_file=splits_file)
-    else: 
+        train, val, test = get_patient_splits_by_fold(
+            fold=fold, n_folds=n_folds, splits_file=splits_file
+        )
+    else:
         logging.info("Using default 5-fold split.")
-        train, val, test = get_patient_splits_by_fold(fold=0, n_folds=5, splits_file=splits_file)
-        
+        train, val, test = get_patient_splits_by_fold(
+            fold=0, n_folds=5, splits_file=splits_file
+        )
+
     train_cores = get_core_ids(train)
     val_cores = get_core_ids(val)
     test_cores = get_core_ids(test)
 
     train_cores = apply_core_filters(
-        train_cores, 
+        train_cores,
         exclude_benign_cores_from_positive_patients=exclude_benign_cores_from_positive_patients,
         involvement_threshold_pct=involvement_threshold_pct,
         undersample_benign_ratio=undersample_benign_ratio,
@@ -199,7 +203,7 @@ def select_cohort(
 
     # if exclude_benign_cores_from_positive_patients:
     #     train_cores = remove_benign_cores_from_positive_patients(train_cores)
-# 
+    #
     # if involvement_threshold_pct is not None:
     #     if involvement_threshold_pct < 0 or involvement_threshold_pct > 100:
     #         raise ValueError(
@@ -208,13 +212,10 @@ def select_cohort(
     #     train_cores = remove_cores_below_threshold_involvement(
     #         train_cores, involvement_threshold_pct
     #     )
-# 
+    #
     # if undersample_benign_ratio is not None:
     #     train_cores = undersample_benign(
     #         train_cores, seed=seed, benign_to_cancer_ratio=undersample_benign_ratio
     #     )
 
     return train_cores, val_cores, test_cores
-
-
-
