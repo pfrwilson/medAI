@@ -708,7 +708,7 @@ class Experiment:
         )
 
     def save_model_weights(self, score, is_best_score=False):
-        if self.config.checkpoint_dir is None or not is_best_score:
+        if self.config.checkpoint_dir is None:
             return
         logging.info("Saving model to checkpoint directory")
         logging.info(f"Checkpoint directory: {self.config.checkpoint_dir}")
