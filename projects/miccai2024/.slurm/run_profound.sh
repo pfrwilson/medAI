@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a40:1
-#SBATCH --time 8:00:00
+#SBATCH --time 16:00:00
 #SBATCH -c 16 
 #SBATCH --output=slurm-%j.log
 #SBATCH --open-mode=append
@@ -14,13 +14,14 @@
 
 
 CENTER=UVA
-EXP_NAME=${CENTER}_ProFound_medsam_backbone_ssl-cnn
-EXP_DIR=experiments/${EXP_NAME}/$SLURM_JOB_ID
-CKPT_DIR=/checkpoint/$USER/$SLURM_JOB_ID
+EXP_NAME=${CENTER}_ProFound_main
+RUN_ID=$SLURM_JOB_ID
+EXP_DIR=experiments/${EXP_NAME}/$RUN_ID
+CKPT_DIR=/checkpoint/$USER/$RUN_ID
 
 # Set environment variables for training
 export TQDM_MININTERVAL=30
-export WANDB_RUN_ID=$SLURM_JOB_ID
+export WANDB_RUN_ID=$RUN_ID
 export WANDB_RESUME=allow
 export PYTHONUNBUFFERED=1
 
@@ -62,6 +63,7 @@ srun -u python train_profound.py \
   --epochs 50 \
   --wd 0 \
   --prompts age psa sparse_cnn_patch_features \
+  --prompt_dropout 0.1 \
   --sparse_cnn_backbone_path /h/pwilson/projects/medAI/projects/miccai2024/checkpoints/${CENTER}_patch_ssl_0.pth \
   --backbone medsam \
   --test_every_epoch \
