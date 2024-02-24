@@ -54,6 +54,17 @@ def build_sammed_2d():
     return model
 
 
+def build_adapter_medsam_256():
+    checkpoint = os.path.join(CHECKPOINT_DIR, "medsam_vit_b_cpu.pth")
+    model = sam_model_registry["vit_b"](checkpoint=checkpoint)
+
+    model.image_encoder = wrap_image_encoder_with_adapter(
+        model.image_encoder, adapter_dim=256
+    )
+    freeze_non_adapter_layers(model.image_encoder)
+    return model
+
+
 class SAMForUnpromptedSegmentation(nn.Module):
     """
     Wraps the SAM model to do unprompted segmentation.
