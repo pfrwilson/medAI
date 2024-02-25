@@ -45,6 +45,7 @@ def parse_args():
     group.add_argument("--mask_size", type=int, default=256, help="The size to use for the masks.")
     group.add_argument("--limit_train_data", type=float, default=1., 
                        help="""If less than 1, chooses a center-balanced subset of the original train data to train with. The value given is the fraction of the original data to use.""")
+    group.add_argument("--train_subsample_seed", type=int, default=42, help="The seed to use for subsampling the training data (if limit_train_data < 1).") 
     group = parser.add_argument_group("Training", "Arguments related to training.")
     group.add_argument("--optimizer", type=str, default="adamw", help="The optimizer to use for training.")
     group.add_argument("--lr", type=float, default=1e-5, help="LR for the model the mask decoder and prompt encoder portions of the model during Stage 2.")
@@ -298,6 +299,7 @@ class Experiment:
             limit_train_data=self.config.limit_train_data
             if self.config.limit_train_data < 1
             else None,
+            train_subset_seed=self.config.train_subsample_seed,
         )
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
