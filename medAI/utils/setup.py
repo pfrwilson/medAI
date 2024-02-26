@@ -157,6 +157,7 @@ class SubmititJobSubmissionConfig:
     cpus_per_task: int = 16
     slurm_qos: tp.Literal["normal", "m2", "m3", "m4", "deadline"] = "m2"
     slurm_account: tp.Optional[str] = None
+    slurm_exclude: tp.Optional[str] = None
     slurm_setup: list[str] = field(default_factory=lambda: [
         "module load pytorch2.1-cuda11.8-python3.10",
         "export PYTHONPATH=$PYTHONPATH:/h/pwilson/projects/medAI",

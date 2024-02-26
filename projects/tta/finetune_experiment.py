@@ -240,8 +240,8 @@ class FinetuneExperiment(BaselineExperiment):
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
-                "fe_model": self.fe_model.state_dict() if save_model else None,
-                "linear": self.linear.state_dict() if save_model else None,
+                "fe_model": self.fe_model.state_dict(),# if save_model else None,
+                "linear": self.linear.state_dict(), #if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
                 "epoch": self.epoch,

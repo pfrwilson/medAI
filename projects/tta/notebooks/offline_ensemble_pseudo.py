@@ -40,7 +40,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: # 
+for LEAVE_OUT in ["JH",]: # , "UVA", "PMCC", "PCC", "CRCEO"
     print("Leave out", LEAVE_OUT)
     
     ## Data Finetuning
@@ -83,13 +83,13 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
             return -1, patch, label, item
 
 
-    val_ds = ExactNCT2013RFImagePatches(
-        split="val",
-        transform=Transform(augment=False),
-        cohort_selection_options=config.cohort_selection_config,
-        patch_options=config.patch_config,
-        debug=config.debug,
-    )
+    # val_ds = ExactNCT2013RFImagePatches(
+    #     split="val",
+    #     transform=Transform(augment=False),
+    #     cohort_selection_options=config.cohort_selection_config,
+    #     patch_options=config.patch_config,
+    #     debug=config.debug,
+    # )
     
     if isinstance(config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
         if config.cohort_selection_config.leave_out == "UVA":
@@ -104,9 +104,9 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
     )
 
 
-    val_loader = DataLoader(
-        val_ds, batch_size=config.batch_size, shuffle=True, num_workers=4
-    )
+    # val_loader = DataLoader(
+    #     val_ds, batch_size=config.batch_size, shuffle=True, num_workers=4
+    # )
 
     test_loader = DataLoader(
         test_ds, batch_size=config.batch_size, shuffle=False, num_workers=4
@@ -131,6 +131,7 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
 
     # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
     CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_1ratio_loco/ensemble_5mdls_gn_1ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
     state = torch.load(CHECkPOINT_PATH)
     [model.load_state_dict(state["list_models"][i]) for i, model in enumerate(list_models)]
@@ -222,9 +223,9 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
     # loader = test_test_loader
     loader = test_loader
     enable_pseudo_label = True
-    temp_scale = True
-    certain_threshold = 0.4
-    thr = 0.25
+    temp_scale = False
+    certain_threshold = 0.3
+    thr = 0.4
 
     metric_calculator = MetricCalculator()
     desc = "test"
@@ -254,7 +255,9 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
                     stacked_logits = stacked_logits / temp + beta
                 
                 # Remove uncertain samples from test-time adaptation
-                certain_idx = F.softmax(stacked_logits, dim=-1).mean(dim=0).max(dim=-1)[0] >= certain_threshold
+                avg_probs = F.softmax(stacked_logits, dim=-1).mean(dim=0)
+                certain_idx =  torch.sum((-avg_probs*torch.log(avg_probs)), dim=-1) <= certain_threshold
+                # certain_idx = avg_probs.max(dim=-1)[0] >= certain_threshold
                 stacked_logits = stacked_logits[:, certain_idx, ...]
                 
                 list_losses = []
@@ -303,9 +306,11 @@ for LEAVE_OUT in ["UVA", "CRCEO", "PCC", "PMCC","JH",]: #
         
     ## Log with wandb
     import wandb
+    group=f"offline_NewEnsmPsdo_0.3entthr_gn_3ratio_loco"
+    
     # group=f"offline_combNewEnsmPsdo_0.3thr_gn_3ratio_loco"
     # group=f"offline_combNewEnsmPsdo_0.25thr_.7uncrtnty_gn_3ratio_loco"
-    group=f"offline_combNewEnsmPsdo_tempsc_0.25thr_gn_3ratio_loco"
+    # group=f"offline_combNewEnsmPsdo_tempsc_0.25thr_gn_3ratio_loco"
     
     # group=f"offline_combNewEnsmPsdo_gn_3ratio_loco"
     # group=f"offline_combNewEnsmPsdo_.8uncrtnty_gn_3ratio_loco"

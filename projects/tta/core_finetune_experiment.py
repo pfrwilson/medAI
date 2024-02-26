@@ -220,6 +220,9 @@ class CoreFinetuneExperiment(BaselineExperiment):
             debug=self.config.debug,
         )
 
+        if isinstance(self.config.cohort_selection_config, LeaveOneCenterOutCohortSelectionOptions):
+            if self.config.cohort_selection_config.leave_out == "UVA":
+                self.config.cohort_selection_config.benign_to_cancer_ratio = 5.0 
         test_ds = ExactNCT2013RFCores(
             split="test",
             transform=Transform(augment=True),
@@ -282,8 +285,8 @@ class CoreFinetuneExperiment(BaselineExperiment):
     def save_states(self, best_model=False, save_model=False):
         torch.save(
             {   
-                "fe_model": self.fe_model.state_dict() if save_model else None,
-                "attention": self.attention.state_dict() if save_model else None,
+                "fe_model": self.fe_model.state_dict(), # if save_model else None,
+                "attention": self.attention.state_dict(), # if save_model else None,
                 "linear": self.linear.state_dict() if save_model else None,
                 "optimizer": self.optimizer.state_dict(),
                 "scheduler": self.scheduler.state_dict(),

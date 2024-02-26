@@ -42,8 +42,9 @@ class MetricCalculator(object):
         self.core_id_probs = {}
         self.core_id_labels = {}
         self.core_id_invs = {}
+        self.core_id_raw_probs = {}
 
-    def update(self, batch_meta_data, probs, labels):
+    def update(self, batch_meta_data, probs, labels, raw_probs=None):
         invs = deepcopy(batch_meta_data["pct_cancer"])
         ids = deepcopy(batch_meta_data["id"])
         for i, id_tensor in enumerate(ids):
@@ -56,9 +57,13 @@ class MetricCalculator(object):
             if id in self.core_id_probs:
                 self.core_id_probs[id].append(probs[i])
                 self.core_id_labels[id].append(labels[i])
+                if raw_probs is not None:
+                    self.core_id_raw_probs[id].append(raw_probs[:, i, ...])
             else:
                 self.core_id_probs[id] = [probs[i]]
                 self.core_id_labels[id] = [labels[i]]
+                if raw_probs is not None:
+                    self.core_id_raw_probs[id] = [raw_probs[:, i, ...]]
 
     def remove_low_inv_ids(self, core_id_invs):
         high_inv_ids = []
@@ -121,15 +126,44 @@ class MetricCalculator(object):
             prefix="all_inv_core_" if core_ids is None else "core_"
             )
             
-    def _get_metrics(self, probs, labels, prefix=""):
+    def _get_metrics(self, probs, labels, prefix="", all_metrics=False):
         metrics: Dict = {}
-        for metric in self.list_of_metrics:
-            metric_name: str = metric.__name__
-            try:
-                metric_value: float = metric(probs, labels, task="multiclass", num_classes=2)
-            except:
-                metric_value: float = metric(probs, labels, task="binary")
+        thr = 0.4
+        tp, fp, tn, fn, _ = torchmetrics.functional.stat_scores(preds=probs[:,1]>=thr, target=labels, task="binary", average="macro")
+        
+        if all_metrics:
+            metrics_list = ["auroc", "accuracy", "sensitivity", "specificity", "TP", "FP", "TN", "FN"]
+        else:
+            metrics_list = ["auroc", "accuracy", "sensitivity", "specificity"]
+            
+        for metric_name in metrics_list:
+            if metric_name == "auroc":
+                metric_value = torchmetrics.functional.auroc(probs, labels, task="multiclass", num_classes=2)
+            elif metric_name == "accuracy":
+                metric_value = (tp/(tp+fn) + tn/(tn+fp))/2
+            elif metric_name == "sensitivity":
+                metric_value = tp/(tp+fn)
+            elif metric_name == "specificity":
+                metric_value = tn/(tn+fp)
+            elif metric_name == "TP":
+                metric_value = tp
+            elif metric_name == "FP":
+                metric_value = fp
+            elif metric_name == "TN":
+                metric_value = tn
+            elif metric_name == "FN":
+                metric_value = fn            
+            else:
+                raise ValueError(f"Metric {metric_name} not recognized")
             metrics[prefix + metric_name] = metric_value
+
+        # for metric in self.list_of_metrics:
+        #     metric_name: str = metric.__name__
+        #     try:
+        #         metric_value: float = metric(probs, labels, task="multiclass", num_classes=2)
+        #     except:
+        #         metric_value: float = metric(probs, labels, task="binary")
+        #     metrics[prefix + metric_name] = metric_value
         return metrics
 
     def _get_best_score_dict(self):
@@ -137,9 +171,22 @@ class MetricCalculator(object):
             "val/best_core_auroc": self.best_val_score,
             "val/best_patch_auroc": self.best_val_patch_score,
             "val/best_all_inv_core_auroc": self.best_all_inv_val_score,
+            "val/best_core_accuracy": self.best_val_acc,
+            "val/best_core_sensitivity": self.best_val_sen,
+            "val/best_core_specificity": self.best_val_spe,
+            "val/best_all_inv_core_accuracy": self.best_all_inv_val_acc,
+            "val/best_all_inv_core_sensitivity": self.best_all_inv_val_sen,
+            "val/best_all_inv_core_specificity": self.best_all_inv_val_spe,
+                        
             "test/best_core_auroc": self.best_test_score,
             "test/best_patch_auroc": self.best_test_patch_score,
             "test/best_all_inv_core_auroc": self.best_all_inv_test_score,
+            "test/best_core_accuracy": self.best_test_acc,
+            "test/best_core_sensitivity": self.best_test_sen,
+            "test/best_core_specificity": self.best_test_spe,
+            "test/best_all_inv_core_accuracy": self.best_all_inv_test_acc,
+            "test/best_all_inv_core_sensitivity": self.best_all_inv_test_sen,
+            "test/best_all_inv_core_specificity": self.best_all_inv_test_spe,
         }
     
     def initialize_best_score(self, best_score_dict: Dict = None):
@@ -147,16 +194,42 @@ class MetricCalculator(object):
             self.best_val_score = 0.0
             self.best_val_patch_score = 0.0
             self.best_all_inv_val_score = 0.0
+            self.best_val_acc = 0.0
+            self.best_val_sen = 0.0
+            self.best_val_spe = 0.0
+            self.best_all_inv_val_acc = 0.0
+            self.best_all_inv_val_sen = 0.0
+            self.best_all_inv_val_spe = 0.0
+            
             self.best_test_score = 0.0
             self.best_test_patch_score = 0.0
             self.best_all_inv_test_score = 0.0
+            self.best_test_acc = 0.0
+            self.best_test_sen = 0.0
+            self.best_test_spe = 0.0
+            self.best_all_inv_test_acc = 0.0
+            self.best_all_inv_test_sen = 0.0
+            self.best_all_inv_test_spe = 0.0
         else:
             self.best_val_score = best_score_dict["val/best_core_auroc"]
             self.best_val_patch_score = best_score_dict["val/best_patch_auroc"]
             self.best_all_inv_val_score = best_score_dict["val/best_all_inv_core_auroc"]
+            self.best_val_acc = best_score_dict["val/best_core_accuracy"]
+            self.best_val_sen = best_score_dict["val/best_core_sensitivity"]
+            self.best_val_spe = best_score_dict["val/best_core_specificity"]
+            self.best_all_inv_val_acc = best_score_dict["val/best_all_inv_core_accuracy"]
+            self.best_all_inv_val_sen = best_score_dict["val/best_all_inv_core_sensitivity"]
+            self.best_all_inv_val_spe = best_score_dict["val/best_all_inv_core_specificity"]
+            
             self.best_test_score = best_score_dict["test/best_core_auroc"]
             self.best_test_patch_score = best_score_dict["test/best_patch_auroc"]
             self.best_all_inv_test_score = best_score_dict["test/best_all_inv_core_auroc"]
+            self.best_test_acc = best_score_dict["test/best_core_accuracy"]
+            self.best_test_sen = best_score_dict["test/best_core_sensitivity"]
+            self.best_test_spe = best_score_dict["test/best_core_specificity"]
+            self.best_all_inv_test_acc = best_score_dict["test/best_all_inv_core_accuracy"]
+            self.best_all_inv_test_sen = best_score_dict["test/best_all_inv_core_sensitivity"]
+            self.best_all_inv_test_spe = best_score_dict["test/best_all_inv_core_specificity"]
             
         return self._get_best_score_dict()
     
@@ -166,6 +239,12 @@ class MetricCalculator(object):
                 self.best_val_score = metrics["core_auroc"]
                 self.best_val_patch_score = metrics["patch_auroc"]
                 self.best_all_inv_val_score = metrics["all_inv_core_auroc"]
+                self.best_val_acc = metrics["core_accuracy"]
+                self.best_val_sen = metrics["core_sensitivity"]
+                self.best_val_spe = metrics["core_specificity"]
+                self.best_all_inv_val_acc = metrics["all_inv_core_accuracy"]
+                self.best_all_inv_val_sen = metrics["all_inv_core_sensitivity"]
+                self.best_all_inv_val_spe = metrics["all_inv_core_specificity"]
                 self.best_score_updated = True
         elif desc == "val":
             self.best_score_updated = False
@@ -174,6 +253,12 @@ class MetricCalculator(object):
             self.best_test_score = metrics["core_auroc"]
             self.best_test_patch_score = metrics["patch_auroc"]
             self.best_all_inv_test_score = metrics["all_inv_core_auroc"]
+            self.best_test_acc = metrics["core_accuracy"]
+            self.best_test_sen = metrics["core_sensitivity"]
+            self.best_test_spe = metrics["core_specificity"]
+            self.best_all_inv_test_acc = metrics["all_inv_core_accuracy"]
+            self.best_all_inv_test_sen = metrics["all_inv_core_sensitivity"]
+            self.best_all_inv_test_spe = metrics["all_inv_core_specificity"]
             self.best_score_updated = False
                 
         return self.best_score_updated, self._get_best_score_dict()
