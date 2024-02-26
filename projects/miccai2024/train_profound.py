@@ -82,11 +82,13 @@ def parse_args():
         group.add_argument(f"--loss_{i}_needle_mask", type=str2bool, default=True, help="If True, the loss will only be applied inside the needle mask.")
         group.add_argument(f"--loss_{i}_weight", type=float, default=1.0, help="The weight to use for the loss function.")
 
+    # WANDB
     group = parser.add_argument_group("Wandb", "Arguments related to wandb.")
     group.add_argument("--project", type=str, default="miccai2024", help="The wandb project to use.")
     group.add_argument("--group", type=str, default=None, help="The wandb group to use.")
     group.add_argument("--name", type=str, default=None, help="The wandb name to use.")
     group.add_argument("--log_images", action="store_true", help="If True, logs images to wandb.")
+    group.add_argument("--tags", type=str, nargs="+", default=[], help="The tags to use for wandb.")
 
     group = parser.add_argument_group("Misc", "Miscellaneous arguments.")
     group.add_argument("--encoder_weights_path", type=str, default=None, help="The path to the encoder weights to use. If None, uses the Foundation Model initialization")
@@ -126,6 +128,7 @@ class Experiment:
             group=self.config.group,
             name=self.config.name,
             config=self.config,
+            tags=self.config.tags,
         )
         logging.info("Wandb initialized")
         logging.info("Wandb url: " + wandb.run.url)
@@ -1005,6 +1008,11 @@ class ProFound(nn.Module):
         self.prompts = prompts
         self.prompt_dropout = prompt_dropout
         self.replace_patch_embed = replace_patch_embed
+        if replace_patch_embed and sam_backbone != "sam_med2d":
+            raise ValueError(
+                "replace_patch_embed is only supported for sam_med2d backbone"
+            )
+
         self.sparse_cnn_backbone_path = sparse_cnn_backbone_path
 
         for p in prompts:
@@ -1015,6 +1023,8 @@ class ProFound(nn.Module):
 
         from medAI.modeling.sam import (
             build_adapter_medsam_256,
+            build_adapter_sam,
+            build_adapter_sammed_2d,
             build_medsam,
             build_sam,
             build_sammed_2d,
@@ -1024,8 +1034,14 @@ class ProFound(nn.Module):
         if sam_backbone == "medsam":
             self.medsam_model = build_medsam()
             self.image_size_for_features = 1024
+        elif sam_backbone == "adapter_medsam":
+            self.medsam_model = build_adapter_medsam_256()
+            self.image_size_for_features = 1024
         elif sam_backbone == "sam":
             self.medsam_model = build_sam()
+            self.image_size_for_features = 1024
+        elif sam_backbone == "adapter_sam":
+            self.medsam_model = build_adapter_sam()
             self.image_size_for_features = 1024
         elif sam_backbone == "sam_med2d":
             self.medsam_model = build_sammed_2d()
@@ -1055,9 +1071,9 @@ class ProFound(nn.Module):
             else:
                 # use the default patch embed which is designed for 256x256 images
                 self.image_size_for_features = 256
-        elif sam_backbone == "adapter_medsam":
-            self.medsam_model = build_adapter_medsam_256()
-            self.image_size_for_features = 1024
+        elif sam_backbone == "adapter_sammed_2d":
+            self.medsam_model = build_adapter_sammed_2d()
+            self.image_size_for_features = 256
 
         if freeze_image_encoder:
             logging.debug("Freezing image encoder")
