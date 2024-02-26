@@ -988,6 +988,8 @@ class ProFound(nn.Module):
         "medsam",
         "sam_med2d",
         "adapter_medsam",
+        "adapter_sam",
+        "adapter_sammed_2d",
     ]
 
     def __init__(
