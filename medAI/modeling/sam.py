@@ -65,6 +65,21 @@ def build_adapter_medsam_256():
     return model
 
 
+def build_adapter_sammed_2d():
+    model = build_sammed_2d()
+    freeze_non_adapter_layers(model.image_encoder)
+    return model
+
+
+def build_adapter_sam():
+    model = build_sam()
+    model.image_encoder = wrap_image_encoder_with_adapter(
+        model.image_encoder, adapter_dim=256
+    )
+    freeze_non_adapter_layers(model.image_encoder)
+    return model
+
+
 class SAMForUnpromptedSegmentation(nn.Module):
     """
     Wraps the SAM model to do unprompted segmentation.
@@ -189,7 +204,7 @@ def wrap_image_encoder_with_adapter(
 
 def freeze_non_adapter_layers(model: nn.Module):
     for name, param in model.named_parameters():
-        if "adapter" not in name:
+        if "adapter" not in name.lower():
             param.requires_grad = False
 
     return model
