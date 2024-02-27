@@ -40,7 +40,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["JH",]: # , "UVA", "PMCC", "PCC", "CRCEO"
+for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: # 
     print("Leave out", LEAVE_OUT)
     
     ## Data Finetuning
@@ -129,8 +129,8 @@ for LEAVE_OUT in ["JH",]: # , "UVA", "PMCC", "PCC", "CRCEO"
                         num_channels=channels
                         )) for _ in range(5)]
 
-    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
     # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_1ratio_loco/ensemble_5mdls_gn_1ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
     state = torch.load(CHECkPOINT_PATH)
@@ -224,7 +224,7 @@ for LEAVE_OUT in ["JH",]: # , "UVA", "PMCC", "PCC", "CRCEO"
     loader = test_loader
     enable_pseudo_label = True
     temp_scale = False
-    certain_threshold = 0.3
+    certain_threshold = 0.2
     thr = 0.4
 
     metric_calculator = MetricCalculator()
@@ -306,7 +306,7 @@ for LEAVE_OUT in ["JH",]: # , "UVA", "PMCC", "PCC", "CRCEO"
         
     ## Log with wandb
     import wandb
-    group=f"offline_NewEnsmPsdo_0.3entthr_gn_3ratio_loco"
+    group=f"offline_EnsmPsdo_0.2entthr_gn_3ratio_loco"
     
     # group=f"offline_combNewEnsmPsdo_0.3thr_gn_3ratio_loco"
     # group=f"offline_combNewEnsmPsdo_0.25thr_.7uncrtnty_gn_3ratio_loco"

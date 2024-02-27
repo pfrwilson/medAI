@@ -72,10 +72,10 @@ class MetricCalculator(object):
                 high_inv_ids.append(id)
         return high_inv_ids
        
-    def get_metrics(self):
+    def get_metrics(self, acc_threshold=0.3):
         high_inv_core_ids = self.remove_low_inv_ids(self.core_id_invs)
-        patch_metrics: Dict = self.get_patch_metrics(high_inv_core_ids)
-        core_metrics: Dict = self.get_core_metrics(high_inv_core_ids)
+        patch_metrics: Dict = self.get_patch_metrics(high_inv_core_ids, acc_threshold)
+        core_metrics: Dict = self.get_core_metrics(high_inv_core_ids, acc_threshold)
         if self.include_all_inv:
             all_inv_patch_metrics: Dict = self.get_patch_metrics()
             all_inv_core_metrics: Dict = self.get_core_metrics()
@@ -84,7 +84,7 @@ class MetricCalculator(object):
         patch_metrics.update(core_metrics)
         return patch_metrics
     
-    def get_patch_metrics(self, core_ids = None):
+    def get_patch_metrics(self, core_ids = None, threshold=0.3):
         if core_ids is None:
             ids = self.core_id_probs.keys()
         else:
@@ -99,10 +99,11 @@ class MetricCalculator(object):
         return self._get_metrics(
             probs, 
             labels, 
-            prefix="all_inv_patch_" if core_ids is None else "patch_"
+            prefix="all_inv_patch_" if core_ids is None else "patch_",
+            threshold=threshold
             )
     
-    def get_core_metrics(self, core_ids = None):
+    def get_core_metrics(self, core_ids = None, threshold=0.3):
         if core_ids is None:
             ids = self.core_id_probs.keys()
         else:
@@ -123,12 +124,13 @@ class MetricCalculator(object):
         return self._get_metrics(
             probs, 
             labels, 
-            prefix="all_inv_core_" if core_ids is None else "core_"
+            prefix="all_inv_core_" if core_ids is None else "core_",
+            threshold=threshold
             )
             
-    def _get_metrics(self, probs, labels, prefix="", all_metrics=False):
+    def _get_metrics(self, probs, labels, prefix="", all_metrics=False, threshold=0.3):
         metrics: Dict = {}
-        thr = 0.4
+        thr = threshold
         tp, fp, tn, fn, _ = torchmetrics.functional.stat_scores(preds=probs[:,1]>=thr, target=labels, task="binary", average="macro")
         
         if all_metrics:

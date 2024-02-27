@@ -123,9 +123,9 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #
                         num_channels=channels
                         ))
 
-    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_crtd3ratio_loco/baseline_gn_crtd3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_crtd3ratio_loco/baseline_gn_crtd3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
     # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_avgprob_3ratio_loco/baseline_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_1nratio_loco/baseline_gn_1nratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/baseline_gn_1nratio_loco/baseline_gn_1nratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
 
     model.load_state_dict(torch.load(CHECkPOINT_PATH)['model'])
@@ -135,7 +135,7 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #
     
     ## MEMO
     loader = test_loader
-    enable_memo = True
+    enable_memo = False
 
     from memo_experiment import batched_marginal_entropy
     metric_calculator = MetricCalculator()
@@ -179,7 +179,7 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #
     ## Find metrics
     # Log metrics every epoch
     metric_calculator.avg_core_probs_first = True
-    metrics = metric_calculator.get_metrics()
+    metrics = metric_calculator.get_metrics(acc_threshold=0.3)
 
     # Update best score
     (best_score_updated,best_score) = metric_calculator.update_best_score(metrics, desc)
@@ -193,12 +193,20 @@ for LEAVE_OUT in ["JH", "PCC", "CRCEO", "PMCC", "UVA"]: #
         }
 
     print(metrics_dict)
+    print(metric_calculator.get_metrics(acc_threshold=0.2))
+    print(metric_calculator.get_metrics(acc_threshold=0.4))
+    print(metric_calculator.get_metrics(acc_threshold=0.6))
+    print(metric_calculator.get_metrics(acc_threshold=0.7))
+    
     
     ## Log with wandb
     import wandb
-    group=f"offline_memo_gn_1nratio_loco"
+    # group=f"offline_memo_gn_1nratio_loco"
+    # group=f"results_offline_memo_gn_3nratio_loco2"
+    group=f"results_offline_baseline_gn_3nratio_loco2"
     # group=f"offline_baseline_5e-4lr_gn_avgprob_3ratio_loco"
     # group=f"offline_newBaseline_1e-4lr2ep_gn_avgprob_3ratio_loco"
+    print(group)
     name= group + f"_{LEAVE_OUT}"
     wandb.init(project="tta", entity="mahdigilany", name=name, group=group)
     # os.environ["WANDB_MODE"] = "enabled"

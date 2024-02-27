@@ -1,26 +1,26 @@
-# ensemble experiment
-NUM_ENSEMBLES=5
-INSTANCE_NORM=False
-USE_BATCH_NORM=True
-GROUP="ensemble_${NUM_ENSEMBLES}mdls_bn_1nratio_loco"
+# # ensemble experiment
+# NUM_ENSEMBLES=5
+# INSTANCE_NORM=False
+# USE_BATCH_NORM=True
+# GROUP="results_ensemble_${NUM_ENSEMBLES}mdls_bn_3nratio_loco"
 
-for CENTER in  "PMCC"  "UVA"  #"JH" "PCC" "CRCEO"
-do
-    python ensemble_experiment.py \
-        --name "${GROUP}_${CENTER}" \
-        --group "${GROUP}" \
-        --cluster "slurm" \
-        --slurm_gres "gpu:a40:1" \
-        --slurm_qos "deadline" \
-        --slurm_account "deadline" \
-        --slurm_exclude "gpu034,gpu017" \
-        --num_ensembles $NUM_ENSEMBLES \
-        --cohort_selection_config "loco" \
-        --leave_out $CENTER \
-        --instance_norm $INSTANCE_NORM \
-        --use_batch_norm $USE_BATCH_NORM \
-        --benign_to_cancer_ratio_train 1.0       
-done 
+# for CENTER in  "JH" "PCC" "PMCC" "CRCEO" "UVA" 
+# do
+#     python ensemble_experiment.py \
+#         --name "${GROUP}_${CENTER}" \
+#         --group "${GROUP}" \
+#         --cluster "slurm" \
+#         --slurm_gres "gpu:a40:1" \
+#         --slurm_qos "deadline" \
+#         --slurm_account "deadline" \
+#         --slurm_exclude "gpu034,gpu017" \
+#         --num_ensembles $NUM_ENSEMBLES \
+#         --cohort_selection_config "loco" \
+#         --leave_out $CENTER \
+#         --instance_norm $INSTANCE_NORM \
+#         --use_batch_norm $USE_BATCH_NORM \
+#         --benign_to_cancer_ratio_train 3.0       
+# done 
 
 
 # # sngp experiment
@@ -44,42 +44,42 @@ done
 # done 
 
 
-# # baseline experiment
-# INSTANCE_NORM=False
-# USE_BATCH_NORM=False
-# # GROUP="baseline_gn_avgprob_3ratio_loco"
-# GROUP="baseline_gn_1nratio_loco"
-# # GROUP="baseline_gn_avgprob_3ratio_1poly_loco"
-# # GROUP="sam_baseline_gn_e-4rho_loco"
-# # GROUP="baseline_bn_inst-nrm_loco"
+# baseline experiment
+INSTANCE_NORM=False
+USE_BATCH_NORM=True
+# GROUP="baseline_gn_avgprob_3ratio_loco"
+GROUP="results_baseline_bn_3nratio_loco"
+# GROUP="baseline_gn_avgprob_3ratio_1poly_loco"
+# GROUP="sam_baseline_gn_e-4rho_loco"
+# GROUP="baseline_bn_inst-nrm_loco"
 
-# for CENTER in "JH" "PMCC" "PCC" "UVA" "CRCEO" #    
-# do
-#     python baseline_experiment.py \
-#         --name "${GROUP}_${CENTER}" \
-#         --group "${GROUP}" \
-#         --slurm_gres "gpu:a40:1" \
-#         --slurm_qos "deadline" \
-#         --slurm_account "deadline" \
-#         --slurm_exclude "gpu034,gpu017" \
-#         --cluster "slurm" \
-#         --cohort_selection_config "loco" \
-#         --leave_out $CENTER \
-#         --instance_norm $INSTANCE_NORM \
-#         --use_batch_norm $USE_BATCH_NORM \
-#         --benign_to_cancer_ratio_train 1.0 \
-#         --use_poly1_loss False \
-#         --eps 1.0 \
-#         --patch_size_mm 5.0 5.0 \
-#         --strides 1.0 1.0 \
-#         --lr 0.0001
-# done
+for CENTER in "JH" "PMCC" "PCC" "UVA" "CRCEO" #    
+do
+    python baseline_experiment.py \
+        --name "${GROUP}_${CENTER}" \
+        --group "${GROUP}" \
+        --slurm_gres "gpu:a40:1" \
+        --slurm_qos "deadline" \
+        --slurm_account "deadline" \
+        --slurm_exclude "gpu034,gpu017" \
+        --cluster "slurm" \
+        --cohort_selection_config "loco" \
+        --leave_out $CENTER \
+        --instance_norm $INSTANCE_NORM \
+        --use_batch_norm $USE_BATCH_NORM \
+        --benign_to_cancer_ratio_train 3.0 \
+        --use_poly1_loss False \
+        --eps 1.0 \
+        --patch_size_mm 5.0 5.0 \
+        --strides 1.0 1.0 \
+        --lr 0.0001
+done
 
 
 # # ttt experiment
 # QUERY_PATCH=True
 # SUPPORT_PATCHES=0
-# GROUP="ttt_${SUPPORT_PATCHES}+1sprt_0.1beta_5e-4adptlr_1nratio_loco"
+# GROUP="ttt_${SUPPORT_PATCHES}+1sprt_0.1beta_5e-4adptlr_2nratio_loco"
 
 # for CENTER in  "JH" "PCC" "PMCC" "CRCEO" "UVA" 
 # do
@@ -92,7 +92,7 @@ done
 #         --slurm_account "deadline" \
 #         --slurm_exclude "gpu034,gpu017" \
 #         --cohort_selection_config "loco" \
-#         --benign_to_cancer_ratio_train 1.0 \
+#         --benign_to_cancer_ratio_train 2.0 \
 #         --leave_out $CENTER \
 #         --include_query_patch $QUERY_PATCH \
 #         --num_support_patches $SUPPORT_PATCHES \
@@ -108,7 +108,7 @@ done
 # # mt3 experiment
 # QUERY_PATCH=True
 # SUPPORT_PATCHES=0
-# GROUP="mt3_${SUPPORT_PATCHES}+1sprt_0.1beta_5e-4innlr_1nratio_loco"
+# GROUP="mt3_${SUPPORT_PATCHES}+1sprt_0.1beta_5e-4innlr_2nratio_loco"
 
 # for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO" # 
 # do
@@ -122,7 +122,7 @@ done
 #         --leave_out $CENTER \
 #         --include_query_patch $QUERY_PATCH \
 #         --num_support_patches $SUPPORT_PATCHES \
-#         --benign_to_cancer_ratio_train 1.0 \
+#         --benign_to_cancer_ratio_train 2.0 \
 #         --epochs 50 \
 #         --inner_steps 1 \
 #         --inner_lr 0.0005 \
@@ -227,8 +227,8 @@ done
 # # checkpoint_path_name="vicreg_pretrn_1024zdim_gn_300ep_3ratio_loco"
 # # GROUP="vicreg_1024-150finetune_1e-4lr_avgprob_bn_3ratio_loco"
 # # checkpoint_path_name="vicreg_pretrn_1024zdim_bn_150ep_3ratio_loco"
-# GROUP="vicreg_1024-150finetune_1e-4lr_bn_1ratio_loco"
-# checkpoint_path_name="vicreg_pretrn_1024zdim_bn_150ep_1ratio_loco"
+# GROUP="vicreg_1024-150finetune_1e-4lr_bn_3ratio_loco"
+# checkpoint_path_name="vicreg_pretrn_1024zdim_bn_150ep_3ratio_loco"
 # for CENTER in  "JH" "PCC" "PMCC" "UVA" "CRCEO"  # 
 # do
 #     python finetune_experiment.py \
@@ -241,7 +241,7 @@ done
 #         --slurm_exclude "gpu034,gpu017" \
 #         --cohort_selection_config "loco" \
 #         --leave_out $CENTER \
-#         --benign_to_cancer_ratio_train 1.0 \
+#         --benign_to_cancer_ratio_train 3.0 \
 #         --instance_norm $INSTANCE_NORM \
 #         --use_batch_norm $USE_BATCH_NORM \
 #         --epochs 50 \
