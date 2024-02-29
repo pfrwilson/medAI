@@ -412,15 +412,15 @@ class BModeDataFactoryV1(DataFactory):
         )
 
         self.train_dataset = BModeDatasetV1(
-            train_cores, self.train_transform, include_rf=True, rf_as_bmode=rf_as_bmode, 
+            train_cores, self.train_transform, rf_as_bmode=rf_as_bmode, 
             include_rf=include_rf
         )
         self.val_dataset = BModeDatasetV1(
-            val_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode, 
+            val_cores, self.val_transform, rf_as_bmode=rf_as_bmode, 
             include_rf=include_rf
         )
         self.test_dataset = BModeDatasetV1(
-            test_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode,
+            test_cores, self.val_transform, rf_as_bmode=rf_as_bmode,
             include_rf=include_rf
         )
 
