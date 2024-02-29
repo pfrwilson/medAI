@@ -40,7 +40,7 @@ from medAI.datasets.nct2013 import (
     PatchOptions
 )
 
-for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: # 
+for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA"]: # 
     print("Leave out", LEAVE_OUT)
     
     ## Data Finetuning
@@ -97,7 +97,7 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
 
     test_ds = ExactNCT2013RFImagePatches(
         split="test",
-        transform=Transform(augment=False),
+        transform=Transform(augment=True),
         cohort_selection_options=config.cohort_selection_config,
         patch_options=config.patch_config,
         debug=config.debug,
@@ -224,6 +224,7 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
     loader = test_loader
     enable_pseudo_label = True
     temp_scale = False
+    use_augs = False
     certain_threshold = 0.8
     thr = 0.4
 
@@ -232,7 +233,7 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
 
     for i, batch in enumerate(tqdm(loader, desc=desc)):
         images_augs, images, labels, meta_data = batch
-        # images_augs = images_augs.cuda()
+        images_augs = images_augs.cuda()
         images = images.cuda()
         labels = labels.cuda()
         
@@ -241,6 +242,8 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
 
         
         if enable_pseudo_label:
+            batch_size, aug_size= images_augs.shape[0], images_augs.shape[1]
+            
             params = []
             for model in adaptation_model_list:
                 params.append({'params': model.parameters()})
@@ -250,19 +253,28 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
             for j in range(1):
                 optimizer.zero_grad()
                 # Forward pass
+
                 stacked_logits = torch.stack([model(images) for model in adaptation_model_list])
                 if temp_scale:
                     stacked_logits = stacked_logits / temp + beta
                 
                 # Remove uncertain samples from test-time adaptation
-                avg_probs = F.softmax(stacked_logits, dim=-1).mean(dim=0)
+                with torch.no_grad():
+                    if use_augs:
+                            stacked_aug_logits = torch.stack([model(images_augs.view(-1, *images_augs.shape[2:])) for model in adaptation_model_list])
+                            stacked_aug_logits = stacked_aug_logits.view(5, batch_size, aug_size, -1) # 5, batch_size, aug_size, 2
+                            stacked_aug_logits = torch.cat([stacked_logits.detach().unsqueeze(dim=2), stacked_aug_logits], dim=2) # 5, batch_size, aug_size+1, 2
+                            avg_probs = F.softmax(stacked_aug_logits, dim=-1).mean(dim=2).mean(dim=0)
+                    else:
+                        avg_probs = F.softmax(stacked_logits, dim=-1).mean(dim=0)
                 # certain_idx =  torch.sum((-avg_probs*torch.log(avg_probs)), dim=-1) <= certain_threshold
                 certain_idx = avg_probs.max(dim=-1)[0] >= certain_threshold
                 stacked_logits = stacked_logits[:, certain_idx, ...]
                 
                 list_losses = []
                 for k, outputs in enumerate(adaptation_model_list):
-                    loss = nn.CrossEntropyLoss()(stacked_logits[k, ...], (F.softmax(stacked_logits, dim=-1).mean(dim=0)[:, 1] >= thr).to(torch.long))
+                    # loss = nn.CrossEntropyLoss()(stacked_logits[k, ...], (F.softmax(stacked_logits, dim=-1).mean(dim=0)[:, 1] >= thr).to(torch.long))
+                    loss = nn.CrossEntropyLoss()(stacked_logits[k, ...], (stacked_logits[k, ...][:, 1] >= thr).to(torch.long))
                     list_losses.append(loss.mean())
                 # Backward pass
                 sum(list_losses).backward()
@@ -312,9 +324,11 @@ for LEAVE_OUT in ["JH","PMCC", "PCC", "CRCEO","UVA",]: #
         
     ## Log with wandb
     import wandb
-    # group=f"retults_offline_EnsmPsdo_0.2entthr_0.3thr_gn_3nratio_loco"
+    # group=f"retults_offline_EnsmPsdo_0.2entthr_augs_gn_3nratio_loco"
+    # group=f"retults_offline_EnsmPsdo_0.2entthr_gn_3nratio_loco"
     # group=f"retults_offline_ensm_gn_3nratio_loco"
-    group=f"retults_offline_EnsmPsdo_0.8thr_gn_3nratio_loco"
+    group=f"retults_offline_sprtEnsmPsdo_0.8thr_gn_3nratio_loco"
+    # group=f"retults_offline_EnsmPsdo_gn_3nratio_loco"
     
     # group=f"offline_EnsmPsdo_0.2entthr_gn_3ratio_loco"
     

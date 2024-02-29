@@ -77,7 +77,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
             label = torch.tensor(item["grade"] != "Benign").long()
             
             if selfT.augment:
-                patch_augs = torch.stack([selfT.transform(patch) for _ in range(5)], dim=0)
+                patch_augs = torch.stack([selfT.transform(patch) for _ in range(2)], dim=0)
                 return patch_augs, patch, label, item
             
             return -1, patch, label, item
@@ -129,8 +129,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                         num_channels=channels
                         )) for _ in range(5)]
 
-    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
-    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_3ratio_loco/ensemble_5mdls_gn_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
+    # CHECkPOINT_PATH = os.path.join(f'/fs01/home/abbasgln/codes/medAI/projects/tta/logs/tta/ensemble_5mdls_gn_avgprob_3ratio_loco/ensemble_5mdls_gn_avgprob_3ratio_loco_{LEAVE_OUT}/', 'best_model.ckpt')
 
     state = torch.load(CHECkPOINT_PATH)
     [model.load_state_dict(state["list_models"][i]) for i, model in enumerate(list_models)]
@@ -224,7 +224,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     loader = test_loader
     enable_memo = True
     temp_scale = False
-    certain_threshold = 0.4
+    certain_threshold = 0.2
+    thr = 0.4
 
     metric_calculator = MetricCalculator()
     desc = "test"
@@ -250,7 +251,6 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
             _images_augs = images_augs.reshape(-1, *images_augs.shape[2:]).cuda()
             # Adapt to test
             for j in range(1):
-                optimizer.zero_grad()
                 # Forward pass
                 stacked_logits = torch.stack([model(_images_augs).reshape(batch_size, aug_size, -1) for model in adaptation_model_list])
                 if temp_scale:
@@ -259,7 +259,8 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                 # Remove uncertain samples from test-time adaptation
                 marginal_probs = F.softmax(stacked_logits, dim=-1).mean(dim=2) # (n_models, batch_size, num_classes)
                 avg_marginal_probs = F.softmax(stacked_logits, dim=-1).mean(dim=2).mean(dim=0) # (batch_size, num_classes)
-                certain_idx = avg_marginal_probs.max(dim=-1)[0] >= certain_threshold
+                # certain_idx = avg_marginal_probs.max(dim=-1)[0] >= certain_threshold
+                certain_idx = torch.sum((-avg_marginal_probs*torch.log(avg_marginal_probs)), dim=-1) <= certain_threshold
                 stacked_logits = stacked_logits[:, certain_idx, ...]
                                 
                 list_losses = []
@@ -269,7 +270,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
                     ## Combined Cross-Entropy
                     # loss = nn.CrossEntropyLoss()(marginal_probs[k,...], avg_marginal_probs)
                     list_losses.append(loss.mean())
-                # Backward pass
+                optimizer.zero_grad()          
                 sum(list_losses).backward()
                 optimizer.step()
         
@@ -296,7 +297,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     metric_calculator.avg_core_probs_first = avg_core_probs_first
 
     # Log metrics every epoch
-    metrics = metric_calculator.get_metrics()
+    metrics = metric_calculator.get_metrics(acc_threshold=0.3)
 
     # Update best score
     (best_score_updated,best_score) = metric_calculator.update_best_score(metrics, desc)
@@ -308,11 +309,18 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     metrics_dict = {
         f"{desc}/{key}": value for key, value in metrics.items()
         }
-
+    
+    print(metrics_dict)
+    print(metric_calculator.get_metrics(acc_threshold=0.2))
+    print(metric_calculator.get_metrics(acc_threshold=0.4))
+    print(metric_calculator.get_metrics(acc_threshold=0.6))
+    print(metric_calculator.get_metrics(acc_threshold=0.7))
+    
         
     ## Log with wandb
     import wandb
-    group=f"offline_sprtNewEnsmMemo_crct_gn_3ratio_loco"
+    # group=f"results_offline_sprtEnsmMemo_gn_3nratio_loco"
+    group=f"results_offline_sprtEnsmMemo_0.2entthr_gn_3nratio_loco"
     # group=f"offline_sprtNewEnsmMemo_.8uncrtnty_gn_3ratio_loco"
     
     # group=f"offline_sprtEnsmMemo_gn_3ratio_loco"
@@ -326,7 +334,7 @@ for LEAVE_OUT in ["JH", "PCC", "PMCC", "UVA", "CRCEO"]: #
     
     # group=f"offline_combEnsmMemo_avgprob_gn_3ratio_loco"
     # group=f"offline_combEnsmMemo_avgprob_.8uncrtnty_gn_3ratio_loco"
-    
+    print(group)
     name= group + f"_{LEAVE_OUT}"
     wandb.init(project="tta", entity="mahdigilany", name=name, group=group)
     # os.environ["WANDB_MODE"] = "enabled"
