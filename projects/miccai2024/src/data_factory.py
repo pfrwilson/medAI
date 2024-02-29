@@ -236,6 +236,7 @@ class TransformV2:
         self.labeled = labeled
         self.mask_size = mask_size
 
+
     def __call__(self, item):
         out = item.copy()
         bmode = item["bmode"]
@@ -268,19 +269,25 @@ class TransformV2:
         )(prostate_mask)
         prostate_mask = Mask(prostate_mask)
 
-        rf = item["rf"]
-        rf = torch.from_numpy(rf.copy()).float()
-        rf = rf.unsqueeze(0)
-        if rf.shape != (2504, 512):
-            rf = T.Resize((2504, 512), antialias=True)(rf)
-        rf = rf.repeat(3, 1, 1)
+        if item.get("rf") is not None: 
+            rf = item["rf"]
+            rf = torch.from_numpy(rf.copy()).float()
+            rf = rf.unsqueeze(0)
+            if rf.shape != (2504, 512):
+                rf = T.Resize((2504, 512), antialias=True)(rf)
+            rf = rf.repeat(3, 1, 1)
 
-        if self.augment == "translate":
-            from .transform import RandomTranslation
+            if self.augment == "translate":
+                from .transform import RandomTranslation
 
-            bmode, rf, needle_mask, prostate_mask = RandomTranslation(
-                translation=(0.2, 0.2)
-            )(bmode, rf, needle_mask, prostate_mask)
+                bmode, rf, needle_mask, prostate_mask = RandomTranslation(
+                    translation=(0.2, 0.2)
+                )(bmode, rf, needle_mask, prostate_mask)
+
+        else: 
+            bmode, needle_mask, prostate_mask = RandomTranslation(
+                    translation=(0.2, 0.2)
+            )(bmode, needle_mask, prostate_mask)
 
         # interpolate the masks to the mask size
         needle_mask = T.Resize(
@@ -297,7 +304,9 @@ class TransformV2:
         out["bmode"] = bmode
         out["needle_mask"] = needle_mask
         out["prostate_mask"] = prostate_mask
-        out["rf"] = rf
+
+        if item.get("rf") is not None:
+            out["rf"] = rf
 
         out["label"] = torch.tensor(item["grade"] != "Benign").long()
         pct_cancer = item["pct_cancer"]
@@ -363,6 +372,7 @@ class BModeDataFactoryV1(DataFactory):
         train_subset_seed: int = 0,
         val_seed: int = 0,
         rf_as_bmode: bool = False,
+        include_rf: bool = True,
     ):
         from medAI.datasets.nct2013.bmode_dataset import BModeDatasetV1
         from medAI.datasets.nct2013.cohort_selection import select_cohort
@@ -402,13 +412,16 @@ class BModeDataFactoryV1(DataFactory):
         )
 
         self.train_dataset = BModeDatasetV1(
-            train_cores, self.train_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+            train_cores, self.train_transform, include_rf=True, rf_as_bmode=rf_as_bmode, 
+            include_rf=include_rf
         )
         self.val_dataset = BModeDatasetV1(
-            val_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+            val_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode, 
+            include_rf=include_rf
         )
         self.test_dataset = BModeDatasetV1(
-            test_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+            test_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode,
+            include_rf=include_rf
         )
 
         self.batch_size = batch_size

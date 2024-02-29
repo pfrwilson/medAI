@@ -308,6 +308,7 @@ class Experiment:
             else None,
             train_subset_seed=self.config.train_subsample_seed,
             rf_as_bmode=self.config.rf_as_bmode,
+            include_rf= "sparse_cnn_patch_features_rf" in self.config.prompts,
         )
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
