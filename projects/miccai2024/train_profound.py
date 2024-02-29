@@ -46,6 +46,8 @@ def parse_args():
     group.add_argument("--limit_train_data", type=float, default=1., 
                        help="""If less than 1, chooses a center-balanced subset of the original train data to train with. The value given is the fraction of the original data to use.""")
     group.add_argument("--train_subsample_seed", type=int, default=42, help="The seed to use for subsampling the training data (if limit_train_data < 1).") 
+    group.add_argument("--rf_as_bmode", action="store_true", help="If True, uses the RF images as B-mode images. (Hack to be used to test foundation model performance on RF directly)")
+    
     group = parser.add_argument_group("Training", "Arguments related to training.")
     group.add_argument("--optimizer", type=str, default="adamw", help="The optimizer to use for training.")
     group.add_argument("--lr", type=float, default=1e-5, help="LR for the model the mask decoder and prompt encoder portions of the model during Stage 2.")
@@ -90,6 +92,7 @@ def parse_args():
     group.add_argument("--log_images", action="store_true", help="If True, logs images to wandb.")
     group.add_argument("--tags", type=str, nargs="+", default=[], help="The tags to use for wandb.")
 
+    # MISC
     group = parser.add_argument_group("Misc", "Miscellaneous arguments.")
     group.add_argument("--encoder_weights_path", type=str, default=None, help="The path to the encoder weights to use. If None, uses the Foundation Model initialization")
     group.add_argument("--encoder_load_mode", type=str, default="none", choices=("dino_medsam", "ibot_medsam", "image_encoder", "none"), help="The mode to use for loading the encoder weights.")
@@ -99,6 +102,7 @@ def parse_args():
     group.add_argument("--exp_dir", type=str, default="experiments/default", help="The directory to use for the experiment.")
     group.add_argument("--checkpoint_dir", type=str, default=None, help="The directory to use for the checkpoints. If None, does not save checkpoints.")
     group.add_argument("--debug", action="store_true", help="If True, runs in debug mode.")
+    group.add_argument("--save_weights", choices=("best", "all"), default="best", help="The mode to use for saving weights.")
 
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit')
 
@@ -303,6 +307,7 @@ class Experiment:
             if self.config.limit_train_data < 1
             else None,
             train_subset_seed=self.config.train_subsample_seed,
+            rf_as_bmode=self.config.rf_as_bmode,
         )
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
@@ -393,6 +398,9 @@ class Experiment:
             involvement = batch["involvement"].to(self.config.device)
             family_history = batch["family_history"].to(self.config.device)
             anatomical_location = batch["loc"].to(self.config.device)
+            approx_psa_density = batch["approx_psa_density"].to(self.config.device)
+            rf = batch.pop("rf").to(self.config.device)
+
             B = len(bmode)
             task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
 
@@ -408,6 +416,8 @@ class Experiment:
                     family_history=family_history,
                     prostate_mask=prostate_mask,
                     needle_mask=needle_mask,
+                    approx_psa_density=approx_psa_density,
+                    rf_image = rf
                 )
 
                 if torch.any(torch.isnan(heatmap_logits)):
@@ -528,6 +538,8 @@ class Experiment:
             anatomical_location = batch["loc"].to(self.config.device)
             B = len(bmode)
             task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
+            approx_psa_density = batch["approx_psa_density"].to(self.config.device)
+            rf = batch.pop('rf').to(self.config.device)
 
             with torch.cuda.amp.autocast(enabled=self.config.use_amp):
                 heatmap_logits = self.model(
@@ -539,6 +551,8 @@ class Experiment:
                     family_history=family_history,
                     prostate_mask=prostate_mask,
                     needle_mask=needle_mask,
+                    approx_psa_density=approx_psa_density,
+                    rf_image = rf
                 )
 
                 # compute predictions
@@ -650,6 +664,9 @@ class Experiment:
         age = batch["age"].to(self.config.device)
         family_history = batch["family_history"].to(self.config.device)
         anatomical_location = batch["loc"].to(self.config.device)
+        approx_psa_density = batch["approx_psa_density"].to(self.config.device)
+        rf = batch.pop("rf").to(self.config.device)
+
         B = len(bmode)
         task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
 
@@ -662,6 +679,8 @@ class Experiment:
             family_history=family_history,
             prostate_mask=prostate_mask,
             needle_mask=needle_mask,
+            approx_psa_density=approx_psa_density,
+            rf_image=rf
         )
 
         pred = logits.sigmoid()
@@ -717,14 +736,20 @@ class Experiment:
     def save_model_weights(self, score, is_best_score=False):
         if self.config.checkpoint_dir is None:
             return
+
+        if self.config.save_weights == "best":
+            if not is_best_score:
+                return
+            else:
+                fname = "best_model.ckpt"
+        else:
+            fname = f"model_epoch{self.epoch}_auc{score:.2f}.ckpt"
+
         logging.info("Saving model to checkpoint directory")
         logging.info(f"Checkpoint directory: {self.config.checkpoint_dir}")
         torch.save(
             self.model.state_dict(),
-            os.path.join(
-                self.config.checkpoint_dir,
-                f"best_model_epoch{self.epoch}_auc{score:.2f}.ckpt",
-            ),
+            os.path.join(self.config.checkpoint_dir, fname),
         )
         # save config as json file
         with open(
@@ -981,6 +1006,8 @@ class ProFound(nn.Module):
         "prostate_mask",
         "sparse_cnn_patch_features",
         "data_independent_prompts",
+        "approx_psa_density",
+        "sparse_cnn_patch_features_rf",
     ]
 
     BACKBONE_OPTIONS = [
@@ -1113,6 +1140,12 @@ class ProFound(nn.Module):
             nn.Linear(128, EMBEDDING_DIM),
         )
 
+        self.approx_psa_density_prompt_module = nn.Sequential(
+            nn.Linear(1, 128),
+            nn.ReLU(),
+            nn.Linear(128, EMBEDDING_DIM),
+        )
+
         # 3 values for family history: 0, 1, 2 (yes, no, unknown)
         self.family_history_prompt_module = nn.Embedding(3, EMBEDDING_DIM)
 
@@ -1157,6 +1190,8 @@ class ProFound(nn.Module):
         family_history=None,
         prostate_mask=None,
         needle_mask=None,
+        approx_psa_density=None,
+        rf_image=None,
     ):
         DEVICE = image.device
         B, C, H, W = image.shape
@@ -1228,6 +1263,25 @@ class ProFound(nn.Module):
             psa_embedding = psa_embedding[:, None, :]
             sparse_embedding = torch.cat([sparse_embedding, psa_embedding], dim=1)
 
+        if "approx_psa_density" in self.prompts:
+            if (
+                psa is None
+                or self.prompt_dropout > 0
+                and self.training
+                and torch.rand(1) < self.prompt_dropout
+            ):
+                approx_psa_density_embedding = self.null_prompt.repeat_interleave(
+                    len(task_id), 0
+                )
+            else:
+                approx_psa_density_embedding = self.approx_psa_density_prompt_module(
+                    approx_psa_density
+                )
+            approx_psa_density_embedding = approx_psa_density_embedding[:, None, :]
+            sparse_embedding = torch.cat(
+                [sparse_embedding, approx_psa_density_embedding], dim=1
+            )
+
         if "age" in self.prompts:
             if (
                 age is None
@@ -1266,61 +1320,16 @@ class ProFound(nn.Module):
 
         if "sparse_cnn_patch_features" in self.prompts:
             # we need to extract patches from the images.
-            patches = []
-            batch_indices = []
-            positions = []
-
-            B = len(image)
-            for i in range(B):
-                from medAI.utils.data.patch_extraction import PatchView
-
-                im = image[i].permute(1, 2, 0).cpu().numpy()
-                mask = needle_mask[i].permute(1, 2, 0).cpu().numpy()
-                pv = PatchView.from_sliding_window(
-                    im,
-                    window_size=(128, 128),
-                    stride=(64, 64),
-                    masks=[mask],
-                    thresholds=[0.2],
-                )
-                for position, patch in zip(pv.positions, pv):
-                    patches.append(torch.from_numpy(patch).permute(2, 0, 1))
-                    positions.append(torch.from_numpy(position))
-                    batch_indices.append(i)
-
-            patches = torch.stack(patches).to(DEVICE)
-            positions = torch.stack(positions).to(DEVICE)
-            positions = positions[:, [1, 0]]
-            batch_indices = torch.tensor(batch_indices)
-            patch_cnn_output = self.patch_feature_cnn(patches)
-            patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
-            position_encoding_outputs = (
-                self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
-                    positions[None, ...], image_size=(1024, 1024)
-                )[0]
+            patch_cnn_sparse_embeddings = self.get_cnn_patch_embedding_bmode(
+                image, needle_mask
             )
-            patch_cnn_output = patch_cnn_output + position_encoding_outputs
-
-            sparse_embeddings_by_batch = []
-            for i in range(B):
-                patch_embeddings_for_batch = patch_cnn_output[batch_indices == i]
-                sparse_embeddings_by_batch.append(patch_embeddings_for_batch)
-
-            max_len = max([len(e) for e in sparse_embeddings_by_batch])
-            patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=DEVICE)
-            for i, e in enumerate(sparse_embeddings_by_batch):
-                patch_cnn_sparse_embeddings[i, : len(e)] = e
-                patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
-
-            if self.prompt_dropout > 0 and self.training:
-                for i in range(patch_cnn_sparse_embeddings.shape[1]):
-                    if torch.rand(1) < self.prompt_dropout:
-                        patch_cnn_sparse_embeddings[
-                            :, i, :
-                        ] = self.null_prompt.repeat_interleave(B, 0)
-
             sparse_embedding = torch.cat(
                 [sparse_embedding, patch_cnn_sparse_embeddings], dim=1
+            )
+
+        if "sparse_cnn_patch_features_rf" in self.prompts:
+            patch_cnn_sparse_embeddings = self.get_cnn_patch_embedding_rf(
+                rf_image, needle_mask
             )
 
         mask_logits = self.medsam_model.mask_decoder.forward(
@@ -1331,6 +1340,143 @@ class ProFound(nn.Module):
             multimask_output=False,
         )[0]
         return mask_logits
+
+    def get_cnn_patch_embedding_bmode(self, image, needle_mask):
+        # we need to extract patches from the images.
+        DEVICE = image.device
+        patches = []
+        batch_indices = []
+        positions = []
+        B = len(image)
+        for i in range(B):
+            from medAI.utils.data.patch_extraction import PatchView
+
+            im = image[i].permute(1, 2, 0).cpu().numpy()
+            mask = needle_mask[i].permute(1, 2, 0).cpu().numpy()
+            pv = PatchView.from_sliding_window(
+                im,
+                window_size=(128, 128),
+                stride=(64, 64),
+                masks=[mask],
+                thresholds=[0.2],
+            )
+            for position, patch in zip(pv.positions, pv):
+                patches.append(torch.from_numpy(patch).permute(2, 0, 1))
+                positions.append(torch.from_numpy(position))
+                batch_indices.append(i)
+
+        patches = torch.stack(patches).to(DEVICE)
+        positions = torch.stack(positions).to(DEVICE)
+        positions = positions[:, [1, 0]]
+        batch_indices = torch.tensor(batch_indices)
+
+        patch_cnn_output = self.patch_feature_cnn(patches)
+        patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
+        position_encoding_outputs = (
+            self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
+                positions[None, ...], image_size=(1024, 1024)
+            )[0]
+        )
+        patch_cnn_output = patch_cnn_output + position_encoding_outputs
+
+        sparse_embeddings_by_batch = []
+        for i in range(B):
+            patch_embeddings_for_batch = patch_cnn_output[batch_indices == i]
+            sparse_embeddings_by_batch.append(patch_embeddings_for_batch)
+
+        max_len = max([len(e) for e in sparse_embeddings_by_batch])
+        patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=DEVICE)
+        for i, e in enumerate(sparse_embeddings_by_batch):
+            patch_cnn_sparse_embeddings[i, : len(e)] = e
+            patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
+
+        if self.prompt_dropout > 0 and self.training:
+            for i in range(patch_cnn_sparse_embeddings.shape[1]):
+                if torch.rand(1) < self.prompt_dropout:
+                    patch_cnn_sparse_embeddings[
+                        :, i, :
+                    ] = self.null_prompt.repeat_interleave(B, 0)
+
+        return patch_cnn_sparse_embeddings
+
+    def get_cnn_patch_embedding_rf(self, image, needle_mask):
+        # we need to extract patches from the images.
+        DEVICE = image.device
+        patches = []
+        batch_indices = []
+        positions = []
+
+        im_size_mm = 28, 46.06
+        B, C, H, W = image.shape
+        logging.debug(f"RF shape: {image.shape}")
+        im_size_px = H, W
+        patch_size_mm = 5, 5
+        patch_stride_mm = 1, 1
+        patch_size_px = int(patch_size_mm[0] / im_size_mm[0] * im_size_px[0]), int(
+            patch_size_mm[1] / im_size_mm[1] * im_size_px[1]
+        )
+        patch_stride_px = int(patch_stride_mm[0] / im_size_mm[0] * im_size_px[0]), int(
+            patch_stride_mm[1] / im_size_mm[1] * im_size_px[1]
+        )
+        logging.debug(f"Patch size: {patch_size_px}")
+
+        B = len(image)
+        for i in range(B):
+            from medAI.utils.data.patch_extraction import PatchView
+
+            im = image[i].permute(1, 2, 0).cpu().numpy()
+            mask = needle_mask[i].permute(1, 2, 0).cpu().numpy()
+            pv = PatchView.from_sliding_window(
+                im,
+                window_size=patch_size_px,
+                stride=patch_stride_px,
+                masks=[mask],
+                thresholds=[0.6],
+                align_to="topright"
+            )
+            for position, patch in zip(pv.positions, pv):
+                patches.append(torch.from_numpy(patch).permute(2, 0, 1))
+                positions.append(torch.from_numpy(position))
+                batch_indices.append(i)
+
+        logging.debug(f"Extracted {len(patches)} patches from {B} rf images")
+        
+        patches = torch.stack(patches).to(DEVICE)
+        # patches should be resized to 256 by 256 as used in the RF CNNs
+        patches = torch.nn.functional.interpolate(patches, size=(256, 256))
+
+        positions = torch.stack(positions).to(DEVICE)
+        positions = positions[:, [1, 0]]
+        batch_indices = torch.tensor(batch_indices)
+
+        patch_cnn_output = self.patch_feature_cnn(patches)
+        patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
+        position_encoding_outputs = (
+            self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
+                positions[None, ...], image_size=(1024, 1024)
+            )[0]
+        )
+        patch_cnn_output = patch_cnn_output + position_encoding_outputs
+
+        sparse_embeddings_by_batch = []
+        for i in range(B):
+            patch_embeddings_for_batch = patch_cnn_output[batch_indices == i]
+            sparse_embeddings_by_batch.append(patch_embeddings_for_batch)
+
+        max_len = max([len(e) for e in sparse_embeddings_by_batch])
+        patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=DEVICE)
+        for i, e in enumerate(sparse_embeddings_by_batch):
+            patch_cnn_sparse_embeddings[i, : len(e)] = e
+            patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
+
+        if self.prompt_dropout > 0 and self.training:
+            for i in range(patch_cnn_sparse_embeddings.shape[1]):
+                if torch.rand(1) < self.prompt_dropout:
+                    patch_cnn_sparse_embeddings[
+                        :, i, :
+                    ] = self.null_prompt.repeat_interleave(B, 0)
+
+        return patch_cnn_sparse_embeddings
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -1357,6 +1503,7 @@ class ProFound(nn.Module):
             [self.null_prompt],
             [self.data_independent_prompts],
             self.family_history_prompt_module.parameters(),
+            self.approx_psa_density_prompt_module.parameters(),
             self.patch_feature_prompt_module.parameters(),
             self.medsam_model.image_encoder.neck.parameters(),
             self.medsam_model.prompt_encoder.parameters(),

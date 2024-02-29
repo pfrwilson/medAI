@@ -46,8 +46,9 @@ class ExactNCT2013DataAccessorBase:
 
 class VectorClusterExactNCT2013DataAccessor(ExactNCT2013DataAccessorBase):
     DATA_ROOT = "/ssd005/projects/exactvu_pca/nct2013"
+    _metadata_path = "/ssd005/projects/exactvu_pca/nct2013/metadata_with_approx_psa_density.csv"
     METADATA = pd.read_csv(
-        "/ssd005/projects/exactvu_pca/nct2013/metadata.csv", index_col=0
+        _metadata_path, index_col=0
     )
     METADATA = METADATA.sort_values(by=["core_id"]).reset_index(drop=True)
     needle_mask = np.load("/ssd005/projects/exactvu_pca/nct2013/needle_mask.npy")
@@ -60,19 +61,22 @@ class VectorClusterExactNCT2013DataAccessor(ExactNCT2013DataAccessorBase):
         self.prostate_segmentation_dir = prostate_segmentation_dir
         self._bmode_data = None
         self._bmode_tag2idx = None
-        self._h5_file = None
+        # self._h5_file = None
 
     def get_metadata_table(self):
         return self.METADATA
 
     def get_rf_image(self, core_id, frame_idx=0):
-        if self._h5_file is None:
-            self._h5_file = h5py.File(self.DATA_H5_PATH, "r")
+        #if self._h5_file is None:
+        #    self._h5_file = h5py.File(self.DATA_H5_PATH, "r")
+            
+        with h5py.File(self.DATA_H5_PATH, "r") as f:
+            arr = f["rf"][core_id][..., frame_idx]
 
         # fpath = (Path(self.DATA_ROOT) / "rf").glob(f"{core_id}*.npy")
         # arr = np.load(list(fpath)[0])
 
-        arr = self._h5_file[f"rf"][core_id][..., frame_idx]
+        # arr = self._h5_file[f"rf"][core_id][..., frame_idx]
 
         return arr
 

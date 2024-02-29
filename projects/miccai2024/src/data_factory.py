@@ -17,6 +17,10 @@ psa_avg = table["psa"].mean()
 age_min = table["age"].min()
 age_max = table["age"].max()
 age_avg = table["age"].mean()
+approx_psa_density_min = table["approx_psa_density"].min()
+approx_psa_density_max = table["approx_psa_density"].max()
+approx_psa_density_avg = table["approx_psa_density"].mean()
+
 
 CORE_LOCATION_TO_IDX = {
     "LML": 0,
@@ -189,6 +193,138 @@ class TransformV1:
         age = (age - age_min) / (age_max - age_min)
         out["age"] = torch.tensor([age]).float()
 
+        approx_psa_density = item["approx_psa_density"]
+        if np.isnan(approx_psa_density):
+            approx_psa_density = approx_psa_density_avg
+        approx_psa_density = (approx_psa_density - approx_psa_density_min) / (
+            approx_psa_density_max - approx_psa_density_min
+        )
+        out["approx_psa_density"] = torch.tensor([approx_psa_density]).float()
+
+        if item["family_history"] is True:
+            out["family_history"] = torch.tensor(1).long()
+        elif item["family_history"] is False:
+            out["family_history"] = torch.tensor(0).long()
+        elif np.isnan(item["family_history"]):
+            out["family_history"] = torch.tensor(2).long()
+
+        out["center"] = item["center"]
+        loc = item["loc"]
+        out["loc"] = torch.tensor(CORE_LOCATION_TO_IDX[loc]).long()
+        out["all_cores_benign"] = torch.tensor(item["all_cores_benign"]).bool()
+        out["dataset_name"] = self.dataset_name
+        out["primary_grade"] = item["primary_grade"]
+        out["secondary_grade"] = item["secondary_grade"]
+        out["grade"] = item["grade"]
+        out["core_id"] = item["core_id"]
+
+        return out
+
+
+class TransformV2:
+    def __init__(
+        self,
+        augment="translate",
+        image_size=1024,
+        mask_size=256,
+        dataset_name="nct",
+        labeled=True,
+    ):
+        self.augment = augment
+        self.image_size = image_size
+        self.dataset_name = dataset_name
+        self.labeled = labeled
+        self.mask_size = mask_size
+
+    def __call__(self, item):
+        out = item.copy()
+        bmode = item["bmode"]
+        bmode = torch.from_numpy(bmode.copy()).float()
+        bmode = bmode.unsqueeze(0)
+        bmode = T.Resize((self.image_size, self.image_size), antialias=True)(bmode)
+        bmode = (bmode - bmode.min()) / (bmode.max() - bmode.min())
+        bmode = bmode.repeat(3, 1, 1)
+        bmode = Image(bmode)
+        if not self.labeled:
+            return {"bmode": bmode}
+
+        needle_mask = item["needle_mask"]
+        needle_mask = needle_mask = torch.from_numpy(needle_mask.copy()).float()
+        needle_mask = needle_mask.unsqueeze(0)
+        needle_mask = T.Resize(
+            (self.image_size, self.image_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(needle_mask)
+        needle_mask = Mask(needle_mask)
+
+        prostate_mask = item["prostate_mask"]
+        prostate_mask = prostate_mask = torch.from_numpy(prostate_mask.copy()).float()
+        prostate_mask = prostate_mask.unsqueeze(0)
+        prostate_mask = T.Resize(
+            (self.image_size, self.image_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(prostate_mask)
+        prostate_mask = Mask(prostate_mask)
+
+        rf = item["rf"]
+        rf = torch.from_numpy(rf.copy()).float()
+        rf = rf.unsqueeze(0)
+        if rf.shape != (2504, 512):
+            rf = T.Resize((2504, 512), antialias=True)(rf)
+        rf = rf.repeat(3, 1, 1)
+
+        if self.augment == "translate":
+            from .transform import RandomTranslation
+
+            bmode, rf, needle_mask, prostate_mask = RandomTranslation(
+                translation=(0.2, 0.2)
+            )(bmode, rf, needle_mask, prostate_mask)
+
+        # interpolate the masks to the mask size
+        needle_mask = T.Resize(
+            (self.mask_size, self.mask_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(needle_mask)
+        prostate_mask = T.Resize(
+            (self.mask_size, self.mask_size),
+            antialias=False,
+            interpolation=InterpolationMode.NEAREST,
+        )(prostate_mask)
+
+        out["bmode"] = bmode
+        out["needle_mask"] = needle_mask
+        out["prostate_mask"] = prostate_mask
+        out["rf"] = rf
+
+        out["label"] = torch.tensor(item["grade"] != "Benign").long()
+        pct_cancer = item["pct_cancer"]
+        if np.isnan(pct_cancer):
+            pct_cancer = 0
+        out["involvement"] = torch.tensor(pct_cancer / 100).float()
+
+        psa = item["psa"]
+        if np.isnan(psa):
+            psa = psa_avg
+        psa = (psa - psa_min) / (psa_max - psa_min)
+        out["psa"] = torch.tensor([psa]).float()
+
+        age = item["age"]
+        if np.isnan(age):
+            age = age_avg
+        age = (age - age_min) / (age_max - age_min)
+        out["age"] = torch.tensor([age]).float()
+
+        approx_psa_density = item["approx_psa_density"]
+        if np.isnan(approx_psa_density):
+            approx_psa_density = approx_psa_density_avg
+        approx_psa_density = (approx_psa_density - approx_psa_density_min) / (
+            approx_psa_density_max - approx_psa_density_min
+        )
+        out["approx_psa_density"] = torch.tensor([approx_psa_density]).float()
+
         if item["family_history"] is True:
             out["family_history"] = torch.tensor(1).long()
         elif item["family_history"] is False:
@@ -224,7 +360,9 @@ class BModeDataFactoryV1(DataFactory):
         augmentations: str = "none",
         labeled: bool = True,
         limit_train_data: float | None = None,
+        train_subset_seed: int = 0,
         val_seed: int = 0,
+        rf_as_bmode: bool = False,
     ):
         from medAI.datasets.nct2013.bmode_dataset import BModeDatasetV1
         from medAI.datasets.nct2013.cohort_selection import select_cohort
@@ -246,24 +384,32 @@ class BModeDataFactoryV1(DataFactory):
             from sklearn.model_selection import StratifiedShuffleSplit
 
             sss = StratifiedShuffleSplit(
-                n_splits=1, test_size=1 - limit_train_data, random_state=0
+                n_splits=1,
+                test_size=1 - limit_train_data,
+                random_state=train_subset_seed,
             )
             for train_index, _ in sss.split(cores, center):
                 train_cores = [cores[i] for i in train_index]
 
-        self.train_transform = TransformV1(
+        self.train_transform = TransformV2(
             augment=augmentations,
             image_size=image_size,
             labeled=labeled,
             mask_size=mask_size,
         )
-        self.val_transform = TransformV1(
+        self.val_transform = TransformV2(
             augment="none", image_size=image_size, labeled=labeled, mask_size=mask_size
         )
 
-        self.train_dataset = BModeDatasetV1(train_cores, self.train_transform)
-        self.val_dataset = BModeDatasetV1(val_cores, self.val_transform)
-        self.test_dataset = BModeDatasetV1(test_cores, self.val_transform)
+        self.train_dataset = BModeDatasetV1(
+            train_cores, self.train_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+        )
+        self.val_dataset = BModeDatasetV1(
+            val_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+        )
+        self.test_dataset = BModeDatasetV1(
+            test_cores, self.val_transform, include_rf=True, rf_as_bmode=rf_as_bmode
+        )
 
         self.batch_size = batch_size
         self.labeled = labeled

@@ -33,12 +33,18 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def parse_args():
     # fmt: off
-    parser = ArgumentParser()
+    parser = ArgumentParser(add_help=False)
     group = parser.add_argument_group("Data")
     group.add_argument("--test_center", type=str, default="UVA")
     group.add_argument("--val_seed", type=int, default=0)
-    group.add_argument("--patch_size", type=int, default=128)
-    group.add_argument("--stride", type=int, default=32)
+    group.add_argument("--data_type", type=str, default="bmode")
+    args, _ = parser.parse_known_args()
+    if args.data_type == "bmode":
+        group.add_argument("--patch_size", type=int, default=128)
+        group.add_argument("--stride", type=int, default=32)
+    else: 
+        group.add_argument("--patch_size_mm", type=float, nargs=2, default=[5.0, 5.0])
+        group.add_argument("--patch_stride_mm", type=float, nargs=2, default=[1.0, 1.0])
     group.add_argument("--batch_size", type=int, default=128)
     group.add_argument("--full_prostate", action="store_true", default=False, 
                        help="""Whether to use the full prostate for SSL patches. If False, only select patches within
@@ -50,6 +56,9 @@ def parse_args():
     parser.add_argument("--save_weights_path", type=str, default="best_model.pth", help="Path to save the best model weights")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to save and load experiment state")
+    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
+
+    parser.add_argument("--name", type=str, default=None, help="Name of the experiment")
 
     # fmt: on
     return parser.parse_args()
@@ -60,10 +69,14 @@ def main(args):
         state = torch.load(args.checkpoint_path)
     else:
         state = None
+    if os.path.exists(args.save_weights_path) and state is None: 
+        print(f"Model weights already exist at {args.save_weights_path}. Exiting.")
+        return
 
     wandb_run_id = state["wandb_run_id"] if state is not None else None
     run = wandb.init(
-        project="miccai2024_ssl_debug", config=args, id=wandb_run_id, resume="allow"
+        project="miccai2024_ssl_debug", config=args, id=wandb_run_id, resume="allow", 
+        name=args.name
     )
     wandb_run_id = run.id
 
@@ -91,6 +104,8 @@ def main(args):
 
     best_score = 0.0 if state is None else state["best_score"]
     start_epoch = 0 if state is None else state["epoch"]
+    early_stopping_counter = 0 if state is None else state['early_stopping_counter']
+
     if state is not None:
         set_all_rng_states(state["rng_states"])
 
@@ -107,6 +122,7 @@ def main(args):
                 "epoch": epoch,
                 "rng_states": get_all_rng_states(),
                 "wandb_run_id": wandb_run_id,
+                "early_stopping_counter": early_stopping_counter,
             }
             torch.save(state, args.checkpoint_path)
 
@@ -130,13 +146,21 @@ def main(args):
 
         metrics = run_linear_probing(model, train_loader, val_loader)
         score = metrics["auc"]
+        metrics = {f"val/{k}": v for k, v in metrics.items()}
+        metrics['epoch'] = epoch
 
-        wandb.log({f"val/{k}": v for k, v in metrics.items()})
+        wandb.log(metrics)
 
         if score > best_score:
+            early_stopping_counter = 0
             best_score = score
             best_model_state = model.state_dict()
             torch.save(best_model_state, args.save_weights_path)
+        else: 
+            early_stopping_counter += 1
+            if early_stopping_counter > 5: 
+                print(f"Early stopping after {epoch} epochs with no improvement")
+                break
 
 
 def run_linear_probing(model, train_loader, test_loader):
@@ -204,6 +228,7 @@ def run_linear_probing(model, train_loader, test_loader):
 
 def make_data_loaders(args):
     print(f"Preparing data loaders for test center {args.test_center}")
+    from src.dataset import BModePatchesDataset, RFPatchesDataset, Transform, SSLTransform
 
     train_patients, val_patients, test_patients = get_patient_splits_by_center(
         args.test_center, val_size=0.2, val_seed=args.val_seed
@@ -228,42 +253,80 @@ def make_data_loaders(args):
     print(f"Val cores: {len(val_core_ids)}")
     print(f"Test cores: {len(test_core_ids)}")
 
-    print("SSL dataset...")
-    ssl_dataset = BModePatchesDataset(
-        ssl_train_core_ids,
-        patch_size=(args.patch_size, args.patch_size),
-        stride=(args.stride, args.stride),
-        needle_mask_threshold=0.6 if not args.full_prostate else -1,
-        prostate_mask_threshold=-1 if not args.full_prostate else 0.1,
-        transform=SSLTransform(),
-    )
-    print("Train dataset...")
-    train_dataset = BModePatchesDataset(
-        train_core_ids,
-        patch_size=(args.patch_size, args.patch_size),
-        stride=(args.stride, args.stride),
-        needle_mask_threshold=0.6,
-        prostate_mask_threshold=-1,
-        transform=Transform(),
-    )
-    print("Val dataset...")
-    val_dataset = BModePatchesDataset(
-        val_core_ids,
-        patch_size=(args.patch_size, args.patch_size),
-        stride=(args.stride, args.stride),
-        needle_mask_threshold=0.6,
-        prostate_mask_threshold=-1,
-        transform=Transform(),
-    )
-    print("Test dataset...")
-    test_dataset = BModePatchesDataset(
-        test_core_ids,
-        patch_size=(args.patch_size, args.patch_size),
-        stride=(args.stride, args.stride),
-        needle_mask_threshold=0.6,
-        prostate_mask_threshold=-1,
-        transform=Transform(),
-    )
+    if args.data_type == "bmode": 
+        print("SSL dataset...")
+        ssl_dataset = BModePatchesDataset(
+            ssl_train_core_ids,
+            patch_size=(args.patch_size, args.patch_size),
+            stride=(args.stride, args.stride),
+            needle_mask_threshold=0.6 if not args.full_prostate else -1,
+            prostate_mask_threshold=-1 if not args.full_prostate else 0.1,
+            transform=SSLTransform(),
+        )
+        print("Train dataset...")
+        train_dataset = BModePatchesDataset(
+            train_core_ids,
+            patch_size=(args.patch_size, args.patch_size),
+            stride=(args.stride, args.stride),
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=-1,
+            transform=Transform(),
+        )
+        print("Val dataset...")
+        val_dataset = BModePatchesDataset(
+            val_core_ids,
+            patch_size=(args.patch_size, args.patch_size),
+            stride=(args.stride, args.stride),
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=-1,
+            transform=Transform(),
+        )
+        print("Test dataset...")
+        test_dataset = BModePatchesDataset(
+            test_core_ids,
+            patch_size=(args.patch_size, args.patch_size),
+            stride=(args.stride, args.stride),
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=-1,
+            transform=Transform(),
+        )
+    else: 
+        print("SSL dataset...")
+        ssl_dataset = RFPatchesDataset(
+            ssl_train_core_ids,
+            patch_size_mm=args.patch_size_mm,
+            patch_stride_mm=args.patch_stride_mm,
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=0.1,
+            transform=SSLTransform(),
+        )
+        print("Train dataset...")
+        train_dataset = RFPatchesDataset(
+            train_core_ids,
+            patch_size_mm=args.patch_size_mm,
+            patch_stride_mm=args.patch_stride_mm,
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=0.1,
+            transform=Transform(),
+        )
+        print("Val dataset...")
+        val_dataset = RFPatchesDataset(
+            val_core_ids,
+            patch_size_mm=args.patch_size_mm,
+            patch_stride_mm=args.patch_stride_mm,
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=0.1,
+            transform=Transform(),
+        )
+        print("Test dataset...")
+        test_dataset = RFPatchesDataset(
+            test_core_ids,
+            patch_size_mm=args.patch_size_mm,
+            patch_stride_mm=args.patch_stride_mm,
+            needle_mask_threshold=0.6,
+            prostate_mask_threshold=0.1,
+            transform=Transform(),
+        )
 
     ssl_loader = torch.utils.data.DataLoader(
         ssl_dataset,
@@ -301,162 +364,6 @@ def make_data_loaders(args):
 
     return ssl_loader, train_loader, val_loader, test_loader
 
-
-class BModePatchesDataset(Dataset):
-    _bmode_data, _core_id_2_idx = load_or_create_resized_bmode_data((1024, 1024))
-    _metadata_table = data_accessor.get_metadata_table()
-
-    def __init__(
-        self,
-        core_ids,
-        patch_size,
-        stride,
-        needle_mask_threshold,
-        prostate_mask_threshold,
-        transform=None,
-    ):
-        self.core_ids = sorted(core_ids)
-        N = len(self.core_ids)
-
-        self._images = [
-            self._bmode_data[self._core_id_2_idx[core_id]] for core_id in core_ids
-        ]
-        self._prostate_masks = np.zeros((N, 256, 256))
-        for i, core_id in enumerate(core_ids):
-            self._prostate_masks[i] = data_accessor.get_prostate_mask(core_id)
-        self._needle_masks = np.zeros((N, 512, 512))
-        for i, core_id in enumerate(core_ids):
-            self._needle_masks[i] = data_accessor.get_needle_mask(core_id)
-        self._patch_views = PatchView.build_collection_from_images_and_masks(
-            self._images,
-            window_size=patch_size,
-            stride=stride,
-            align_to="topright",
-            mask_lists=[self._prostate_masks, self._needle_masks],
-            thresholds=[prostate_mask_threshold, needle_mask_threshold],
-        )
-
-        self._metadata_dicts = []
-        for core_id in self.core_ids:
-            metadata = (
-                self._metadata_table[self._metadata_table.core_id == core_id]
-                .iloc[0]
-                .to_dict()
-            )
-            self._metadata_dicts.append(metadata)
-
-        self._indices = []
-        for i, pv in enumerate(self._patch_views):
-            self._indices.extend([(i, j) for j in range(len(pv))])
-
-        self.transform = transform
-
-    def __len__(self):
-        return len(self._indices)
-
-    def __getitem__(self, idx):
-        i, j = self._indices[idx]
-        pv = self._patch_views[i]
-
-        item = {}
-        item["patch"] = pv[j]
-
-        metadata = self._metadata_dicts[i].copy()
-        item.update(metadata)
-
-        if self.transform is not None:
-            item = self.transform(item)
-        return item
-
-
-class RFPatchesDataset(Dataset):
-    _metadata_table = data_accessor.get_metadata_table()
-
-    def __init__(
-        self,
-        core_ids,
-        patch_size_mm,
-        patch_stride_mm,
-        needle_mask_threshold,
-        prostate_mask_threshold,
-    ):
-        self.core_ids = core_ids
-        im_size_mm = 28, 46.06
-        im_size_px = data_accessor.get_rf_image(core_ids[0], 0).shape
-        self.patch_size_px = int(patch_size_mm[0] * im_size_px[0] / im_size_mm[0]), int(
-            patch_size_mm[1] * im_size_px[1] / im_size_mm[1]
-        )
-        self.patch_stride_px = int(
-            patch_stride_mm[0] * im_size_px[0] / im_size_mm[0]
-        ), int(patch_stride_mm[1] * im_size_px[1] / im_size_mm[1])
-
-        self._images = [data_accessor.get_rf_image(core_id, 0) for core_id in core_ids]
-        self._prostate_masks = [
-            data_accessor.get_prostate_mask(core_id) for core_id in core_ids
-        ]
-        self._needle_masks = [
-            data_accessor.get_needle_mask(core_id) for core_id in core_ids
-        ]
-
-        self._patch_views = PatchView.build_collection_from_images_and_masks(
-            self._images,
-            window_size=self.patch_size_px,
-            stride=self.patch_stride_px,
-            align_to="topright",
-            mask_lists=[self._prostate_masks, self._needle_masks],
-            thresholds=[prostate_mask_threshold, needle_mask_threshold],
-        )
-        self._indices = []
-        for i, pv in enumerate(self._patch_views):
-            self._indices.extend([(i, j) for j in range(len(pv))])
-
-    def __len__(self):
-        return len(self._indices)
-
-    def __getitem__(self, idx):
-        i, j = self._indices[idx]
-        metadata = (
-            self._metadata_table[self._metadata_table.core_id == self.core_ids[i]]
-            .iloc[0]
-            .to_dict()
-        )
-        pv = self._patch_views[i]
-        patch = pv[j]
-
-        patch = torch.from_numpy(patch.copy())
-        patch = patch.unsqueeze(0).repeat_interleave(3, dim=0)
-        from torchvision.transforms.functional import resize
-
-        patch = resize(patch, (224, 224))
-        postition = pv.positions[j]
-
-        return {"patch": patch, **metadata, "position": postition}
-
-
-class SSLTransform:
-    def __call__(self, item):
-        patch = item["patch"]
-        patch = torch.from_numpy(patch).float() / 255.0
-        patch = patch.unsqueeze(0).repeat_interleave(3, dim=0)
-
-        augs = [
-            T.RandomHorizontalFlip(),
-            T.RandomVerticalFlip(),
-            T.RandomAffine(degrees=0, translate=(0.2, 0.2)),
-        ]
-        p1 = T.Compose(augs)(patch)
-        p2 = T.Compose(augs)(patch)
-
-        return p1, p2
-
-
-class Transform:
-    def __call__(self, item):
-        patch = item["patch"]
-        patch = torch.from_numpy(patch).float() / 255.0
-        patch = patch.unsqueeze(0).repeat_interleave(3, dim=0)
-        item["patch"] = patch
-        return item
 
 
 if __name__ == "__main__":
