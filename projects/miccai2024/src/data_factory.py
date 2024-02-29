@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as T
 from torchvision.transforms.functional import InterpolationMode
 from torchvision.tv_tensors import Image, Mask
+from .transform import RandomTranslation
 
 from medAI.datasets.nct2013.data_access import data_accessor
 
@@ -278,7 +279,7 @@ class TransformV2:
             rf = rf.repeat(3, 1, 1)
 
             if self.augment == "translate":
-                from .transform import RandomTranslation
+               
 
                 bmode, rf, needle_mask, prostate_mask = RandomTranslation(
                     translation=(0.2, 0.2)

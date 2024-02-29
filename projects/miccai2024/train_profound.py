@@ -400,7 +400,10 @@ class Experiment:
             family_history = batch["family_history"].to(self.config.device)
             anatomical_location = batch["loc"].to(self.config.device)
             approx_psa_density = batch["approx_psa_density"].to(self.config.device)
-            rf = batch.pop("rf").to(self.config.device)
+            if 'rf' in batch: 
+                rf = batch.pop("rf").to(self.config.device)
+            else: 
+                rf = None 
 
             B = len(bmode)
             task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
@@ -540,7 +543,11 @@ class Experiment:
             B = len(bmode)
             task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
             approx_psa_density = batch["approx_psa_density"].to(self.config.device)
-            rf = batch.pop('rf').to(self.config.device)
+
+            if 'rf' in batch: 
+                rf = batch.pop("rf").to(self.config.device)
+            else: 
+                rf = None 
 
             with torch.cuda.amp.autocast(enabled=self.config.use_amp):
                 heatmap_logits = self.model(
@@ -666,7 +673,10 @@ class Experiment:
         family_history = batch["family_history"].to(self.config.device)
         anatomical_location = batch["loc"].to(self.config.device)
         approx_psa_density = batch["approx_psa_density"].to(self.config.device)
-        rf = batch.pop("rf").to(self.config.device)
+        if 'rf' in batch: 
+            rf = batch.pop("rf").to(self.config.device)
+        else: 
+            rf = None 
 
         B = len(bmode)
         task_id = torch.zeros(B, dtype=torch.long, device=bmode.device)
