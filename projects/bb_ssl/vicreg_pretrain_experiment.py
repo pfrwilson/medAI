@@ -16,8 +16,8 @@ from dataclasses import dataclass
 import logging
 import wandb
 
-import medAI
-from medAI.utils.setup import BasicExperiment, BasicExperimentConfig
+import utils
+from utils.setup import BasicExperiment, BasicExperimentConfig
 
 import torchvision
 import torchvision.transforms as transforms
@@ -142,7 +142,7 @@ class VicregPretrainExperiment(BasicExperiment):
             weight_decay=self.config.optimizer_config.weight_decay,
             )
         
-        self.scheduler = medAI.utils.LinearWarmupCosineAnnealingLR(
+        self.scheduler = utils.LinearWarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=5 * len(self.train_loader),
             max_epochs=self.config.epochs * len(self.train_loader),
