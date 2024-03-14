@@ -9,7 +9,12 @@ import wandb
 from einops import rearrange, repeat
 from matplotlib import pyplot as plt
 from src.data_factory import BModeDataFactoryV1, BModeDataFactoryV1Config
-from src.prostnfound import ProstNFound, ProstNFoundConfig, BackboneOptions, PromptOptions
+from src.prostnfound import (
+    ProstNFound,
+    ProstNFoundConfig,
+    BackboneOptions,
+    PromptOptions,
+)
 from torch.nn import functional as F
 from tqdm import tqdm
 from copy import deepcopy
@@ -23,7 +28,6 @@ from medAI.utils.reproducibiliy import (
 )
 
 
-
 class WandbConfig(BaseModel):
     project: str = "miccai2024"
     group: tp.Optional[str] = None
@@ -33,6 +37,20 @@ class WandbConfig(BaseModel):
 
 
 class CancerDetectionValidRegionLossConfig(BaseModel):
+    """Configuration for the cancer detection valid region loss.
+    
+    This loss applies a base loss pixel-wise to the pixels within a
+    valid region of the output heatmap
+
+    Args:
+        base_loss: the base loss to apply
+        loss_pos_weight: the positive weight for the loss
+        prostate_mask: whether to apply the prostate mask as a filter 
+            when selecting the pixels to apply the loss to
+        needle_mask: whether to apply the needle mask as a filter
+            when selecting the pixels to apply the loss to
+    """
+
     base_loss: str = "ce"
     loss_pos_weight: float = 1.0
     prostate_mask: bool = True
@@ -40,6 +58,20 @@ class CancerDetectionValidRegionLossConfig(BaseModel):
 
 
 class OptimizerConfig(BaseModel):
+    """Optimizer configuration.
+
+    Args:
+        encoder_lr: learning rate for the encoder
+        encoder_frozen_epochs: number of epochs to keep the encoder frozen
+        encoder_warmup_epochs: number of epochs to warm up the encoder learning rate
+        main_lr: learning rate for the main model
+        main_frozen_epochs: number of epochs to keep the main model frozen
+        main_warmup_epochs: number of epochs to warm up the main model learning rate
+        cnn_lr: learning rate for the CNN
+        cnn_frozen_epochs: number of epochs to keep the CNN frozen
+        cnn_warmup_epochs: number of epochs to warm up the CNN learning rate
+        wd: weight decay
+    """
     optimizer: str = "adamw"
     cnn_lr: float = 1e-5
     cnn_frozen_epochs: int = 0
@@ -54,6 +86,34 @@ class OptimizerConfig(BaseModel):
 
 
 class Args(BaseModel):
+    """Full training configuration.
+
+    Args:
+        wandb: wandb configuration
+        data: data configuration
+        model: model configuration
+        optimizer: optimizer configuration
+        losses: list of loss configurations
+        loss_weights: list of loss weights (how much to weight each loss term in the final loss function)
+        epochs: number of epochs to train for
+        cutoff_epoch: optional cutoff epoch (this is useful for debugging and testing)
+        test_every_epoch: whether to run the test set every epoch 
+        accumulate_grad_steps: number of gradient accumulation steps (increases 
+            the effective batch size by this factor)
+        run_test: whether to run the test set. Only to be used for final evaluation.
+        encoder_weights_path: path to the encoder weights, which may have been 
+            obtained from a pretraining run
+        encoder_load_mode: how to load the encoder weights (see `load_encoder_weights` in `train_prostnfound.py`)
+        seed: random seed for reproducibility
+        use_amp: whether to use automatic mixed precision
+        device: device to run on (eg. 'cuda' or 'cpu')
+        exp_dir: directory to save experiment outputs
+        checkpoint_dir: directory to save model checkpoints
+        debug: whether to run in debug mode 
+        save_weights: whether to save the best weights or all weights
+        custom_prompt_table_path: path to a custom prompt table
+    """
+
     wandb: WandbConfig = WandbConfig()
     data: BModeDataFactoryV1Config = BModeDataFactoryV1Config(
         test_center="UVA",
@@ -79,26 +139,32 @@ class Args(BaseModel):
     accumulate_grad_steps: int = 8
     run_test: bool = False
 
-    # misc 
+    # misc
     encoder_weights_path: tp.Optional[str] = None
     encoder_load_mode: str = "none"
-    seed: int = 0 
+    seed: int = 0
     use_amp: bool = False
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     exp_dir: str = "experiments/default"
     checkpoint_dir: tp.Optional[str] = None
     debug: bool = False
     save_weights: str = "best"
-    custom_prompt_table_path: tp.Optional[str] = None   
+    custom_prompt_table_path: tp.Optional[str] = None
 
     def model_post_init(self, __context=None):
-        if self.model.sam_backbone in [BackboneOptions.adapter_sammed_2d, BackboneOptions.sam_med2d]: 
-            self.data.mask_size = 64 
-        else: 
+        if self.model.sam_backbone in [
+            BackboneOptions.adapter_sammed_2d,
+            BackboneOptions.sam_med2d,
+        ]:
+            self.data.mask_size = 64
+        else:
             self.data.mask_size = 256
-        if self.data.limit_train_data is None: 
+        if self.data.limit_train_data is None:
             self.data.limit_train_data = 1.0
-
+        if self.encoder_weights_path is not None:
+            raise NotImplementedError(
+                "Loading encoder weights is not yet implemented in the new config system"
+            )
 
 class Experiment:
     def __init__(self, config: Args):
@@ -258,6 +324,7 @@ class Experiment:
 
         self.optimizer = AdamW(params, weight_decay=self.config.optimizer.wd)
         from torch.optim.lr_scheduler import LambdaLR
+
         self.lr_scheduler = LambdaLR(
             self.optimizer,
             [
@@ -286,16 +353,14 @@ class Experiment:
         logging.info("Setting up data")
 
         data_config = deepcopy(self.config.data)
-        data_config.include_rf = "sparse_cnn_patch_features_rf" in self.config.model.prompts
+        data_config.include_rf = (
+            "sparse_cnn_patch_features_rf" in self.config.model.prompts
+        )
         data_config.limit_train_data = (
-            data_config.limit_train_data
-            if data_config.limit_train_data < 1
-            else None
+            data_config.limit_train_data if data_config.limit_train_data < 1 else None
         )
 
-        data_factory = BModeDataFactoryV1(
-            data_config
-        )
+        data_factory = BModeDataFactoryV1(data_config)
         self.train_loader = data_factory.train_loader()
         self.val_loader = data_factory.val_loader()
         self.test_loader = data_factory.test_loader()
@@ -808,7 +873,7 @@ class Experiment:
         ) as f:
             import json
 
-            json.dump(dataclass_to_dict(self.config), f)
+            json.dump(self.config.model_dump(), f, indent=4)
 
     def teardown(self):
         # remove experiment state file
@@ -1094,10 +1159,6 @@ def build_sam_unetr():
 
 
 if __name__ == "__main__":
-    args = Args(
-        wandb=WandbConfig(
-            project='miccai2024_repro'
-        )
-    )
+    args = Args(wandb=WandbConfig(project="miccai2024_repro"))
     experiment = Experiment(args)
     experiment.run()

@@ -8,6 +8,23 @@ from pydantic import BaseModel
 
 
 class PromptOptions(StrEnum):
+    """Options for prompts that can be used in the ProstNFound model.
+    
+    Members: 
+        task: Task prompt (not currently used, could be used to encode the task ID for multitask training)
+        anatomical: Anatomical location prompt (Sextant biopsy loc)
+        psa: PSA prompt 
+        age: Age prompt
+        family_history: Family history prompt
+        prostate_mask: Prostate mask prompt
+        sparse_cnn_patch_features: Sparse CNN patch features prompt
+        data_independent_prompts: Data independent prompts
+        approx_psa_density: Approximate PSA density prompt
+        sparse_cnn_patch_features_rf: Sparse CNN patch features for RF images prompt
+        dense_cnn_features: Dense CNN features prompt
+        custom: Custom prompt
+    """
+
     task = "task"
     anatomical = "anatomical"
     psa = "psa"
@@ -29,10 +46,6 @@ class BackboneOptions(StrEnum):
     adapter_medsam = "adapter_medsam"
     adapter_sam = "adapter_sam"
     adapter_sammed_2d = "adapter_sammed_2d"
-
-
-class ProstNFoundOptimizerConfig:
-    ...
 
 
 class ProstNFoundConfig(BaseModel):
@@ -585,219 +598,6 @@ class ProstNFound(nn.Module):
         # pad to length of longest sequence
         max_len = max([len(e) for e in sparse_embeddings_by_batch])
         patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=image.device)
-        for i, e in enumerate(sparse_embeddings_by_batch):
-            patch_cnn_sparse_embeddings[i, : len(e)] = e
-            patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
-
-        # maybe apply prompt dropout, for each patch independently
-        # (if they are pooled, it will be applied to the pooled embeddings)
-        if self.config.prompt_dropout > 0 and self.training:
-            for i in range(patch_cnn_sparse_embeddings.shape[1]):
-                if torch.rand(1) < self.config.prompt_dropout:
-                    patch_cnn_sparse_embeddings[
-                        :, i, :
-                    ] = self.null_prompt.repeat_interleave(B, 0)
-
-        B, N, C = patch_cnn_sparse_embeddings.shape
-        if self.config.pool_patch_features == "transformer":
-            patch_cnn_sparse_embeddings = self.patch_aggregator(
-                patch_cnn_sparse_embeddings
-            )
-            patch_cnn_sparse_embeddings = patch_cnn_sparse_embeddings.mean(
-                dim=1, keepdim=True
-            )
-
-        return patch_cnn_sparse_embeddings
-
-    def get_cnn_patch_embedding_bmode(self, image, needle_mask, prostate_mask):
-        # we need to extract patches from the images.
-        DEVICE = image.device
-        patches = []
-        batch_indices = []
-        positions = []
-        B = len(image)
-        for i in range(B):
-            from medAI.utils.data.patch_extraction import PatchView
-
-            im = image[i].permute(1, 2, 0).cpu().numpy()
-            mask = needle_mask[i].permute(1, 2, 0).cpu().numpy()
-            prostate_mask_ = prostate_mask[i].permute(1, 2, 0).cpu().numpy()
-
-            # whether to use the whole prostate mask for the CNN patches
-            # or just the needle mask
-            if self.config.cnn_patches_whole_prostate:
-                masks = [prostate_mask_]
-                thresholds = [0.9]
-            else:
-                masks = [mask, prostate_mask_]
-                thresholds = [0.3, 0.9]
-
-            pv = PatchView.from_sliding_window(
-                im,
-                window_size=(128, 128),
-                stride=(64, 64),
-                masks=masks,
-                thresholds=thresholds,
-            )
-            for position, patch in zip(pv.positions, pv):
-                patches.append(torch.from_numpy(patch).permute(2, 0, 1))
-                positions.append(torch.from_numpy(position))
-                batch_indices.append(i)
-
-        patches = torch.stack(patches).to(DEVICE)
-        positions = torch.stack(positions).to(DEVICE)
-        positions = positions[:, [1, 0]]
-        batch_indices = torch.tensor(batch_indices)
-
-        patch_cnn_output = self.patch_feature_cnn(patches)
-        patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
-        if self.config.pos_embed_cnn_patch:
-            position_encoding_outputs = (
-                self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
-                    positions[None, ...], image_size=(1024, 1024)
-                )[0]
-            )
-            patch_cnn_output = patch_cnn_output + position_encoding_outputs
-
-        sparse_embeddings_by_batch = []
-        for i in range(B):
-            patch_embeddings_for_batch = patch_cnn_output[batch_indices == i]  # N x 256
-            if self.config.pool_patch_features == "mean":
-                if len(patch_embeddings_for_batch) == 0:
-                    return None  # no patches found
-                patch_embeddings_for_batch = torch.mean(
-                    patch_embeddings_for_batch, dim=0, keepdim=True
-                )
-            elif self.config.pool_patch_features == "max":
-                if len(patch_embeddings_for_batch) == 0:
-                    return None
-                patch_embeddings_for_batch = torch.max(
-                    patch_embeddings_for_batch, dim=0, keepdim=True
-                ).values
-            sparse_embeddings_by_batch.append(patch_embeddings_for_batch)
-
-        max_len = max([len(e) for e in sparse_embeddings_by_batch])
-        patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=DEVICE)
-        for i, e in enumerate(sparse_embeddings_by_batch):
-            patch_cnn_sparse_embeddings[i, : len(e)] = e
-            patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]
-
-        # maybe apply prompt dropout, for each patch independently
-        # (if they are pooled, it will be applied to the pooled embeddings)
-        if self.config.prompt_dropout > 0 and self.training:
-            for i in range(patch_cnn_sparse_embeddings.shape[1]):
-                if torch.rand(1) < self.config.prompt_dropout:
-                    patch_cnn_sparse_embeddings[
-                        :, i, :
-                    ] = self.null_prompt.repeat_interleave(B, 0)
-
-        B, N, C = patch_cnn_sparse_embeddings.shape
-        if self.config.pool_patch_features == "transformer":
-            patch_cnn_sparse_embeddings = self.patch_aggregator(
-                patch_cnn_sparse_embeddings
-            )
-            patch_cnn_sparse_embeddings = patch_cnn_sparse_embeddings.mean(
-                dim=1, keepdim=True
-            )
-
-        return patch_cnn_sparse_embeddings
-
-    def get_cnn_patch_embedding_rf(self, image, needle_mask, prostate_mask):
-        # we need to extract patches from the images.
-        DEVICE = image.device
-        patches = []
-        batch_indices = []
-        positions = []
-
-        im_size_mm = 28, 46.06
-        B, C, H, W = image.shape
-        logging.debug(f"RF shape: {image.shape}")
-        im_size_px = H, W
-        patch_size_mm = 5, 5
-        if not self.config.cnn_patches_whole_prostate:
-            patch_stride_mm = 1, 1
-        else:
-            patch_stride_mm = 2, 2
-        patch_size_px = int(patch_size_mm[0] / im_size_mm[0] * im_size_px[0]), int(
-            patch_size_mm[1] / im_size_mm[1] * im_size_px[1]
-        )
-        patch_stride_px = int(patch_stride_mm[0] / im_size_mm[0] * im_size_px[0]), int(
-            patch_stride_mm[1] / im_size_mm[1] * im_size_px[1]
-        )
-        logging.debug(f"Patch size: {patch_size_px}")
-
-        B = len(image)
-        for i in range(B):
-            from medAI.utils.data.patch_extraction import PatchView
-
-            im = image[i].permute(1, 2, 0).cpu().numpy()
-            mask = needle_mask[i].permute(1, 2, 0).cpu().numpy()
-            prostate_mask_ = prostate_mask[i].permute(1, 2, 0).cpu().numpy()
-
-            if self.config.cnn_patches_whole_prostate:
-                masks = [prostate_mask_]
-                thresholds = [0.9]
-            else:
-                masks = [mask]
-                thresholds = [0.6]
-
-            pv = PatchView.from_sliding_window(
-                im,
-                window_size=patch_size_px,
-                stride=patch_stride_px,
-                masks=masks,
-                thresholds=thresholds,
-                align_to="topright",
-            )
-            for position, patch in zip(pv.positions, pv):
-                patches.append(torch.from_numpy(patch).permute(2, 0, 1))
-                positions.append(torch.from_numpy(position))
-                batch_indices.append(i)
-
-        logging.debug(f"Extracted {len(patches)} patches from {B} rf images")
-        if len(patches) == 0:
-            return None
-
-        patches = torch.stack(patches).to(DEVICE)
-        # patches should be resized to 256 by 256 as used in the RF CNNs
-        patches = torch.nn.functional.interpolate(
-            patches, size=(256, 256), mode="bilinear"
-        )
-
-        positions = torch.stack(positions).to(DEVICE)
-        positions = positions[:, [1, 0]]
-        batch_indices = torch.tensor(batch_indices)
-
-        patch_cnn_output = self.patch_feature_cnn(patches)
-        patch_cnn_output = self.patch_feature_prompt_module(patch_cnn_output)
-
-        if self.config.pos_embed_cnn_patch:
-            position_encoding_outputs = (
-                self.medsam_model.prompt_encoder.pe_layer.forward_with_coords(
-                    positions[None, ...], image_size=(1024, 1024)
-                )[0]
-            )
-            patch_cnn_output = patch_cnn_output + position_encoding_outputs
-
-        sparse_embeddings_by_batch = []
-        for i in range(B):
-            patch_embeddings_for_batch = patch_cnn_output[batch_indices == i]  # N x 256
-            if self.config.pool_patch_features == "mean":
-                if len(patch_embeddings_for_batch) == 0:
-                    return None  # no patches found
-                patch_embeddings_for_batch = torch.mean(
-                    patch_embeddings_for_batch, dim=0, keepdim=True
-                )
-            elif self.config.pool_patch_features == "max":
-                if len(patch_embeddings_for_batch) == 0:
-                    return None
-                patch_embeddings_for_batch = torch.max(
-                    patch_embeddings_for_batch, dim=0, keepdim=True
-                ).values
-            sparse_embeddings_by_batch.append(patch_embeddings_for_batch)
-
-        max_len = max([len(e) for e in sparse_embeddings_by_batch])
-        patch_cnn_sparse_embeddings = torch.zeros(B, max_len, 256, device=DEVICE)
         for i, e in enumerate(sparse_embeddings_by_batch):
             patch_cnn_sparse_embeddings[i, : len(e)] = e
             patch_cnn_sparse_embeddings[i, len(e) :] = self.pad_token[None, None, :]

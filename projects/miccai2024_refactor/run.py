@@ -98,6 +98,7 @@ if not DEBUG:
         cpus_per_task=16,
         slurm_qos='m2', 
         stderr_to_stdout=True,
+        slurm_name='ProstNFound'
     )
 
     job = executor.submit(Main(args))
