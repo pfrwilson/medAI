@@ -104,10 +104,6 @@ class VectorClusterExactNCT2013DataAccessor(ExactNCT2013DataAccessorBase):
     def get_needle_mask(self, core_id):
         return self.needle_mask
 
-    def __del__(self):
-        if self._h5_file is not None:
-            self._h5_file.close()
-
 
 class SmallFormatHDF5ExactNCT2013DataAccessor(ExactNCT2013DataAccessorBase):
     def __init__(self, path):
