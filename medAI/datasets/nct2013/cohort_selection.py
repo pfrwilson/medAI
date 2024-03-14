@@ -167,9 +167,10 @@ def select_cohort(
         The following arguments are used to filter the cores in the cohort, affecting
             only the train sets:
         remove_benign_cores_from_positive_patients (bool): If True, remove cores from patients with malignant cores that also have benign cores.
+            Only applies to the training set.
         involvement_threshold_pct (float): If specified, remove cores with less than the given percentage of cancer cells.
-            this should be a value between 0 and 100.
-        undersample_benign_ratio (float): If specified, undersample the benign cores to the given ratio.
+            this should be a value between 0 and 100. Only applies to the training set.
+        undersample_benign_ratio (float): If specified, undersample the benign cores to the given ratio. Only applies to the training set.
         seed (int): Random seed to use for the undersampling.
         splits_file: if specified, use the given csv file to load the train/val/test splits (kfold only)
     """
