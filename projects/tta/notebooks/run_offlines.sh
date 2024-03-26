@@ -6,7 +6,8 @@
 #SBATCH --job-name=submitit
 #SBATCH --mem=16GB
 #SBATCH --nodes=1
-#SBATCH --qos=m2
+#SBATCH --qos=deadline
+#SBATCH --account=deadline
 #SBATCH --exclude=gpu034,gpu017
 #SBATCH --time=240
 #SBATCH --output=/fs01/home/abbasgln/codes/medAI/projects/tta/notebooks/logs/%J.out
@@ -21,7 +22,7 @@
 # python offline_ensemble_memo.py
 # python offline_memo.py
 # python offline_divemble_pseudo.py
-# python results_memo.py
-python results_ensemble_pseudo.py
+python results_memo.py
+# python results_ensemble_pseudo.py
 # python results_finetune.py
 # python results_sar.py
